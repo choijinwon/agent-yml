@@ -1,0 +1,714 @@
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: run-python-image-template-with-buildkit
+  namespace: argo
+  labels:
+    workflows.argoproj.io/creator: system-serviceaccount-argo-argo-server
+spec:
+  entrypoint: main
+  serviceAccountName: argo-kserver
+  arguments:
+    parameters:
+      - name: bitbucket-address-user-code
+        value: git@bitbucket.CHANGE_ME.internal:project/sample-api.git # CHANGE_ME
+      - name: runtime-image
+        value: harbor.CHANGE_ME.internal/runtime/python311@sha256:0000000000000000000000000000000000000000000000000000000000000000 # CHANGE_ME
+      - name: zeus-pypi-url
+        value: https://zeus.CHANGE_ME.internal/simple # CHANGE_ME
+      - name: registry-address
+        value: harbor.CHANGE_ME.internal # CHANGE_ME
+      - name: registry-project
+        value: applications # CHANGE_ME
+      - name: image-tag
+        value: 1.0.0 # CHANGE_ME
+      - name: cache-registry-address
+        value: harbor.CHANGE_ME.internal/build-cache # CHANGE_ME
+      - name: buildkit-address
+        value: tcp://buildkitd.CHANGE_ME.internal:1234 # CHANGE_ME
+      - name: notification-server-url
+        value: "" # CHANGE_ME; empty disables notification
+  volumeClaimTemplates:
+    - metadata:
+        name: workspace
+      spec:
+        accessModes:
+          - ReadWriteMany
+        storageClassName: CHANGE_ME-rwx-storage # CHANGE_ME
+        resources:
+          requests:
+            storage: 20Gi # CHANGE_ME
+  volumes:
+    - name: registry-auth
+      secret:
+        secretName: registry-auth
+    - name: bitbucket-ssh
+      secret:
+        secretName: bitbucket-ssh
+        defaultMode: 256
+    - name: zeus-pypi-auth
+      secret:
+        secretName: zeus-pypi-auth
+  templates:
+    - name: main
+      dag:
+        tasks:
+          - name: get-repository-name-from-git
+            template: get-repository-name-from-git
+            arguments:
+              parameters:
+                - name: git-address
+                  value: "{{workflow.parameters.bitbucket-address-user-code}}"
+          - name: clone-source
+            depends: get-repository-name-from-git.Succeeded
+            template: clone-source
+            arguments:
+              parameters:
+                - name: git-address
+                  value: "{{workflow.parameters.bitbucket-address-user-code}}"
+          - name: validate-runtime-image
+            template: validate-runtime-image
+            arguments:
+              parameters:
+                - name: runtime-image
+                  value: "{{workflow.parameters.runtime-image}}"
+          - name: report-zeus-connectivity
+            template: report-zeus-connectivity
+            arguments:
+              parameters:
+                - name: zeus-pypi-url
+                  value: "{{workflow.parameters.zeus-pypi-url}}"
+                - name: phase
+                  value: before-download
+          - name: validate-lock
+            depends: clone-source.Succeeded
+            template: validate-lock
+          - name: download-wheels
+            depends: validate-lock.Succeeded && report-zeus-connectivity.Succeeded
+            template: download-wheels
+            arguments:
+              parameters:
+                - name: zeus-pypi-url
+                  value: "{{workflow.parameters.zeus-pypi-url}}"
+                - name: lock-file-name
+                  value: "{{tasks.validate-lock.outputs.parameters.lock-file-name}}"
+          - name: verify-wheelhouse
+            depends: download-wheels.Succeeded
+            template: verify-wheelhouse
+            arguments:
+              parameters:
+                - name: lock-file-name
+                  value: "{{tasks.validate-lock.outputs.parameters.lock-file-name}}"
+          - name: report-zeus-after-download
+            depends: download-wheels.Succeeded
+            template: report-zeus-connectivity
+            arguments:
+              parameters:
+                - name: zeus-pypi-url
+                  value: "{{workflow.parameters.zeus-pypi-url}}"
+                - name: phase
+                  value: after-download
+          - name: prepare-build-context
+            depends: validate-runtime-image.Succeeded && verify-wheelhouse.Succeeded && report-zeus-after-download.Succeeded
+            template: prepare-build-context
+            arguments:
+              parameters:
+                - name: repository-name
+                  value: "{{tasks.get-repository-name-from-git.outputs.parameters.repository-name}}"
+                - name: runtime-image
+                  value: "{{tasks.validate-runtime-image.outputs.parameters.runtime-image}}"
+                - name: parent-image-digest
+                  value: "{{tasks.validate-runtime-image.outputs.parameters.parent-image-digest}}"
+                - name: lock-file-name
+                  value: "{{tasks.validate-lock.outputs.parameters.lock-file-name}}"
+                - name: lock-hash
+                  value: "{{tasks.validate-lock.outputs.parameters.lock-hash}}"
+                - name: image-reference
+                  value: "{{workflow.parameters.registry-address}}/{{workflow.parameters.registry-project}}/{{tasks.get-repository-name-from-git.outputs.parameters.repository-name}}:{{workflow.parameters.image-tag}}"
+                - name: cache-reference
+                  value: "{{workflow.parameters.cache-registry-address}}/{{tasks.get-repository-name-from-git.outputs.parameters.repository-name}}:buildcache"
+          - name: build-test-target
+            depends: prepare-build-context.Succeeded
+            template: build-test-target
+            arguments:
+              parameters:
+                - name: buildkit-address
+                  value: "{{workflow.parameters.buildkit-address}}"
+                - name: runtime-image
+                  value: "{{tasks.validate-runtime-image.outputs.parameters.runtime-image}}"
+                - name: cache-reference
+                  value: "{{workflow.parameters.cache-registry-address}}/{{tasks.get-repository-name-from-git.outputs.parameters.repository-name}}:buildcache"
+          - name: build-release-image
+            depends: build-test-target.Succeeded
+            template: build-release-image
+            arguments:
+              parameters:
+                - name: buildkit-address
+                  value: "{{workflow.parameters.buildkit-address}}"
+                - name: runtime-image
+                  value: "{{tasks.validate-runtime-image.outputs.parameters.runtime-image}}"
+                - name: image-reference
+                  value: "{{workflow.parameters.registry-address}}/{{workflow.parameters.registry-project}}/{{tasks.get-repository-name-from-git.outputs.parameters.repository-name}}:{{workflow.parameters.image-tag}}"
+                - name: cache-reference
+                  value: "{{workflow.parameters.cache-registry-address}}/{{tasks.get-repository-name-from-git.outputs.parameters.repository-name}}:buildcache"
+          - name: parse-image-digest
+            depends: build-release-image.Succeeded
+            template: parse-image-digest
+            arguments:
+              parameters:
+                - name: image-digest
+                  value: "{{tasks.build-release-image.outputs.parameters.image-digest}}"
+          - name: generate-build-report
+            depends: parse-image-digest.Succeeded
+            template: generate-build-report
+            arguments:
+              parameters:
+                - name: repository-name
+                  value: "{{tasks.get-repository-name-from-git.outputs.parameters.repository-name}}"
+                - name: image-reference
+                  value: "{{tasks.build-release-image.outputs.parameters.image-reference}}"
+                - name: image-digest
+                  value: "{{tasks.parse-image-digest.outputs.parameters.parsed-image-digest}}"
+                - name: parent-image-digest
+                  value: "{{tasks.validate-runtime-image.outputs.parameters.parent-image-digest}}"
+                - name: runtime-image
+                  value: "{{tasks.validate-runtime-image.outputs.parameters.runtime-image}}"
+                - name: lock-file-name
+                  value: "{{tasks.validate-lock.outputs.parameters.lock-file-name}}"
+                - name: lock-hash
+                  value: "{{tasks.validate-lock.outputs.parameters.lock-hash}}"
+                - name: wheel-count
+                  value: "{{tasks.download-wheels.outputs.parameters.wheel-count}}"
+                - name: wheel-total-bytes
+                  value: "{{tasks.download-wheels.outputs.parameters.wheel-total-bytes}}"
+                - name: wheel-download-seconds
+                  value: "{{tasks.download-wheels.outputs.parameters.download-seconds}}"
+                - name: average-download-bytes-per-second
+                  value: "{{tasks.download-wheels.outputs.parameters.average-download-bytes-per-second}}"
+                - name: zeus-before-download-total-seconds
+                  value: "{{tasks.report-zeus-connectivity.outputs.parameters.total-seconds}}"
+                - name: zeus-after-download-total-seconds
+                  value: "{{tasks.report-zeus-after-download.outputs.parameters.total-seconds}}"
+                - name: build-seconds
+                  value: "{{tasks.build-release-image.outputs.parameters.build-seconds}}"
+          - name: notify-build-result
+            depends: generate-build-report.Succeeded
+            template: notify-build-result
+            arguments:
+              parameters:
+                - name: notification-server-url
+                  value: "{{workflow.parameters.notification-server-url}}"
+                - name: report-json
+                  value: "{{tasks.generate-build-report.outputs.parameters.report-json}}"
+
+    - name: get-repository-name-from-git
+      inputs:
+        parameters:
+          - name: git-address
+      outputs:
+        parameters:
+          - name: repository-name
+            valueFrom:
+              path: /tmp/repository-name.txt
+      script:
+        image: harbor.CHANGE_ME.internal/platform/python-tools:3.11@sha256:0000000000000000000000000000000000000000000000000000000000000000 # CHANGE_ME
+        command: [sh]
+        source: |
+          set -euo pipefail
+          python - <<'PY'
+          import re
+          import sys
+
+          address = r'''{{inputs.parameters.git-address}}'''.strip()
+          if not address or any(c in address for c in "\r\n\0"):
+              sys.exit("git-address is empty or contains a forbidden character")
+          match = re.search(r"(?:[:/])([^/:]+?)(?:\.git)?/?$", address)
+          if not match:
+              sys.exit("unable to extract repository name from git-address")
+          name = re.sub(r"\.git$", "", match.group(1))
+          if not re.fullmatch(r"[A-Za-z0-9._-]+", name):
+              sys.exit("repository name contains unsupported characters")
+          with open("/tmp/repository-name.txt", "w", encoding="utf-8") as output:
+              output.write(name)
+          print(f"repository-name={name}")
+          PY
+
+    - name: clone-source
+      inputs:
+        parameters:
+          - name: git-address
+      script:
+        image: harbor.CHANGE_ME.internal/platform/git-tools:2.45@sha256:0000000000000000000000000000000000000000000000000000000000000000 # CHANGE_ME
+        command: [sh]
+        source: |
+          set -euo pipefail
+          rm -rf /workspace/source
+          mkdir -p /workspace/source
+          chmod 700 /root/.ssh
+          export GIT_SSH_COMMAND="ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/root/.ssh/known_hosts"
+          git clone --depth 1 -- "{{inputs.parameters.git-address}}" /workspace/source
+        volumeMounts:
+          - name: workspace
+            mountPath: /workspace
+          - name: bitbucket-ssh
+            mountPath: /root/.ssh
+            readOnly: true
+
+    - name: validate-runtime-image
+      inputs:
+        parameters:
+          - name: runtime-image
+      outputs:
+        parameters:
+          - name: runtime-image
+            valueFrom:
+              path: /tmp/runtime-image.txt
+          - name: parent-image-digest
+            valueFrom:
+              path: /tmp/parent-image-digest.txt
+      script:
+        image: harbor.CHANGE_ME.internal/platform/python-tools:3.11@sha256:0000000000000000000000000000000000000000000000000000000000000000 # CHANGE_ME
+        command: [sh]
+        source: |
+          set -euo pipefail
+          python - <<'PY'
+          import re
+          import sys
+
+          image = r'''{{inputs.parameters.runtime-image}}'''.strip()
+          if "@" not in image:
+              sys.exit("runtime-image must be pinned by digest")
+          reference, digest = image.rsplit("@", 1)
+          if not reference or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+              sys.exit("runtime-image must end with @sha256:<64 lowercase hex characters>")
+          open("/tmp/runtime-image.txt", "w", encoding="utf-8").write(image)
+          open("/tmp/parent-image-digest.txt", "w", encoding="utf-8").write(digest)
+          print("runtime image digest format is valid")
+          PY
+
+    - name: report-zeus-connectivity
+      inputs:
+        parameters:
+          - name: zeus-pypi-url
+          - name: phase
+      outputs:
+        parameters:
+          - name: report-json
+            valueFrom:
+              path: /tmp/zeus-performance.json
+          - name: total-seconds
+            valueFrom:
+              path: /tmp/total-seconds.txt
+          - name: http-code
+            valueFrom:
+              path: /tmp/http-code.txt
+        artifacts:
+          - name: zeus-performance-report
+            path: /tmp/zeus-performance.json
+            archive:
+              none: {}
+      script:
+        image: harbor.CHANGE_ME.internal/platform/curl-jq:8.8@sha256:0000000000000000000000000000000000000000000000000000000000000000 # CHANGE_ME
+        command: [sh]
+        env:
+          - name: ZEUS_USERNAME
+            valueFrom:
+              secretKeyRef:
+                name: zeus-pypi-auth
+                key: username
+          - name: ZEUS_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: zeus-pypi-auth
+                key: password
+        source: |
+          set -euo pipefail
+          umask 077
+          python - <<'PY'
+          import os
+          from urllib.parse import urlsplit
+
+          host = urlsplit(r'''{{inputs.parameters.zeus-pypi-url}}''').hostname
+          if not host:
+              raise SystemExit("zeus-pypi-url has no hostname")
+          with open("/tmp/zeus.netrc", "w", encoding="utf-8") as netrc:
+              netrc.write(f"machine {host}\nlogin {os.environ['ZEUS_USERNAME']}\npassword {os.environ['ZEUS_PASSWORD']}\n")
+          PY
+          chmod 600 /tmp/zeus.netrc
+          format='{"dnsSeconds":%{time_namelookup},"tcpConnectSeconds":%{time_connect},"tlsConnectSeconds":%{time_appconnect},"firstByteSeconds":%{time_starttransfer},"totalSeconds":%{time_total},"downloadBytes":%{size_download},"downloadSpeedBytesPerSecond":%{speed_download},"httpCode":%{http_code},"remoteIp":"%{remote_ip}","remotePort":%{remote_port},"redirectCount":%{num_redirects}}'
+          metrics="$(curl --silent --show-error --location --fail-with-body --output /dev/null --netrc-file /tmp/zeus.netrc --write-out "$format" -- "{{inputs.parameters.zeus-pypi-url}}")"
+          rm -f /tmp/zeus.netrc
+          jq -n \
+            --argjson metrics "$metrics" \
+            --arg phase "{{inputs.parameters.phase}}" \
+            --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg workflowName "{{workflow.name}}" \
+            --arg workflowUid "{{workflow.uid}}" \
+            --arg namespace "{{workflow.namespace}}" \
+            '$metrics + {phase:$phase,timestamp:$timestamp,workflowName:$workflowName,workflowUid:$workflowUid,namespace:$namespace}' \
+            > /tmp/zeus-performance.json
+          jq -r '.totalSeconds' /tmp/zeus-performance.json > /tmp/total-seconds.txt
+          jq -r '.httpCode' /tmp/zeus-performance.json > /tmp/http-code.txt
+          jq '{phase,totalSeconds,httpCode}' /tmp/zeus-performance.json
+
+    - name: validate-lock
+      outputs:
+        parameters:
+          - name: lock-file-name
+            valueFrom:
+              path: /workspace/generated/lock-file-name.txt
+          - name: lock-hash
+            valueFrom:
+              path: /workspace/generated/lock-hash.txt
+      script:
+        image: harbor.CHANGE_ME.internal/platform/python-build-tools:1.0.0@sha256:0000000000000000000000000000000000000000000000000000000000000000 # CHANGE_ME
+        command: [sh]
+        source: |
+          set -euo pipefail
+          mkdir -p /workspace/generated
+          if [ -f /workspace/source/requirements.lock ]; then
+            lock_file=requirements.lock
+          elif [ -f /workspace/source/requirements.txt ]; then
+            lock_file=requirements.txt
+            echo "WARNING: requirements.txt fallback is allowed for migration only; use requirements.lock in production" >&2
+          else
+            echo "neither requirements.lock nor requirements.txt exists" >&2
+            exit 1
+          fi
+          python /opt/build-tools/scripts/validate_lock.py "/workspace/source/$lock_file"
+          printf '%s' "$lock_file" > /workspace/generated/lock-file-name.txt
+          sha256sum "/workspace/source/$lock_file" | awk '{print $1}' > /workspace/generated/lock-hash.txt
+        volumeMounts:
+          - name: workspace
+            mountPath: /workspace
+
+    - name: download-wheels
+      synchronization:
+        semaphore:
+          configMapKeyRef:
+            name: zeus-concurrency-limit
+            key: wheel-downloads
+      inputs:
+        parameters:
+          - name: zeus-pypi-url
+          - name: lock-file-name
+      outputs:
+        parameters:
+          - name: wheel-count
+            valueFrom:
+              path: /workspace/generated/wheel-count.txt
+          - name: wheel-total-bytes
+            valueFrom:
+              path: /workspace/generated/wheel-total-bytes.txt
+          - name: download-seconds
+            valueFrom:
+              path: /workspace/generated/download-seconds.txt
+          - name: average-download-bytes-per-second
+            valueFrom:
+              path: /workspace/generated/average-download-bytes-per-second.txt
+      script:
+        image: harbor.CHANGE_ME.internal/platform/python-build-tools:1.0.0@sha256:0000000000000000000000000000000000000000000000000000000000000000 # CHANGE_ME
+        command: [sh]
+        env:
+          - name: ZEUS_USERNAME
+            valueFrom:
+              secretKeyRef:
+                name: zeus-pypi-auth
+                key: username
+          - name: ZEUS_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: zeus-pypi-auth
+                key: password
+        source: |
+          set -euo pipefail
+          rm -rf /workspace/wheelhouse
+          mkdir -p /workspace/wheelhouse /workspace/generated
+          start="$(date +%s)"
+          PIP_INDEX_URL="$(python - <<'PY'
+          import os
+          from urllib.parse import quote, urlsplit, urlunsplit
+          url = r'''{{inputs.parameters.zeus-pypi-url}}'''
+          parts = urlsplit(url)
+          user = quote(os.environ['ZEUS_USERNAME'], safe='')
+          password = quote(os.environ['ZEUS_PASSWORD'], safe='')
+          print(urlunsplit((parts.scheme, f'{user}:{password}@{parts.netloc}', parts.path, parts.query, parts.fragment)))
+          PY
+          )"
+          python -m pip download \
+            --index-url "$PIP_INDEX_URL" \
+            --only-binary=:all: \
+            --prefer-binary \
+            --disable-pip-version-check \
+            --timeout 30 \
+            --retries 3 \
+            --requirement "/workspace/source/{{inputs.parameters.lock-file-name}}" \
+            --dest /workspace/wheelhouse
+          unset PIP_INDEX_URL
+          end="$(date +%s)"
+          seconds="$((end - start))"
+          count="$(find /workspace/wheelhouse -type f -name '*.whl' | wc -l | tr -d ' ')"
+          [ "$count" -gt 0 ] || { echo "wheelhouse is empty" >&2; exit 1; }
+          bytes="$(find /workspace/wheelhouse -type f -name '*.whl' -exec stat -c '%s' {} + | awk '{sum += $1} END {print sum + 0}')"
+          average="$((bytes / (seconds > 0 ? seconds : 1)))"
+          printf '%s' "$count" > /workspace/generated/wheel-count.txt
+          printf '%s' "$bytes" > /workspace/generated/wheel-total-bytes.txt
+          printf '%s' "$seconds" > /workspace/generated/download-seconds.txt
+          printf '%s' "$average" > /workspace/generated/average-download-bytes-per-second.txt
+          printf 'downloaded %s wheels (%s bytes) in %s seconds\n' "$count" "$bytes" "$seconds"
+        volumeMounts:
+          - name: workspace
+            mountPath: /workspace
+
+    - name: verify-wheelhouse
+      inputs:
+        parameters:
+          - name: lock-file-name
+      script:
+        image: harbor.CHANGE_ME.internal/platform/python-build-tools:1.0.0@sha256:0000000000000000000000000000000000000000000000000000000000000000 # CHANGE_ME
+        command: [sh]
+        source: |
+          set -euo pipefail
+          rm -rf /tmp/python-verify
+          python -m pip install \
+            --no-index \
+            --find-links=/workspace/wheelhouse \
+            --only-binary=:all: \
+            --disable-pip-version-check \
+            --target=/tmp/python-verify \
+            --requirement "/workspace/source/{{inputs.parameters.lock-file-name}}"
+        volumeMounts:
+          - name: workspace
+            mountPath: /workspace
+
+    - name: prepare-build-context
+      inputs:
+        parameters:
+          - name: repository-name
+          - name: runtime-image
+          - name: parent-image-digest
+          - name: lock-file-name
+          - name: lock-hash
+          - name: image-reference
+          - name: cache-reference
+      script:
+        image: harbor.CHANGE_ME.internal/platform/python-build-tools:1.0.0@sha256:0000000000000000000000000000000000000000000000000000000000000000 # CHANGE_ME
+        command: [sh]
+        source: |
+          set -euo pipefail
+          rm -rf /workspace/generated/context
+          mkdir -p /workspace/generated/context/app /workspace/generated/context/wheelhouse
+          cp -a /workspace/source/. /workspace/generated/context/app/
+          cp -a /workspace/wheelhouse/. /workspace/generated/context/wheelhouse/
+          cp "/workspace/source/{{inputs.parameters.lock-file-name}}" /workspace/generated/context/requirements.lock
+          cat > /workspace/generated/build-spec.json <<'JSON'
+          {
+            "repositoryName": "{{inputs.parameters.repository-name}}",
+            "runtimeImage": "{{inputs.parameters.runtime-image}}",
+            "parentImageDigest": "{{inputs.parameters.parent-image-digest}}",
+            "lockFileName": "{{inputs.parameters.lock-file-name}}",
+            "lockHash": "{{inputs.parameters.lock-hash}}",
+            "imageReference": "{{inputs.parameters.image-reference}}",
+            "cacheReference": "{{inputs.parameters.cache-reference}}"
+          }
+          JSON
+          python /opt/build-tools/scripts/validate_build_spec.py \
+            --schema /opt/build-tools/schemas/build-spec.schema.json \
+            /workspace/generated/build-spec.json
+          python /opt/build-tools/scripts/render_dockerfile.py \
+            --template /opt/build-tools/templates/Dockerfile.template \
+            --output /workspace/generated/context/Dockerfile
+          cp /opt/build-tools/templates/docker-bake.hcl /workspace/generated/context/docker-bake.hcl
+          test -s /workspace/generated/context/Dockerfile
+          test -s /workspace/generated/context/docker-bake.hcl
+        volumeMounts:
+          - name: workspace
+            mountPath: /workspace
+
+    - name: build-test-target
+      inputs:
+        parameters:
+          - name: buildkit-address
+          - name: runtime-image
+          - name: cache-reference
+      script:
+        image: harbor.CHANGE_ME.internal/platform/buildkit-client-tools:1.0.0@sha256:0000000000000000000000000000000000000000000000000000000000000000 # CHANGE_ME
+        command: [sh]
+        env:
+          - name: DOCKER_CONFIG
+            value: /root/.docker
+        source: |
+          set -euo pipefail
+          buildctl --addr "{{inputs.parameters.buildkit-address}}" build \
+            --frontend dockerfile.v0 \
+            --local context=/workspace/generated/context \
+            --local dockerfile=/workspace/generated/context \
+            --opt filename=Dockerfile \
+            --opt target=test \
+            --opt "build-arg:RUNTIME_IMAGE={{inputs.parameters.runtime-image}}" \
+            --import-cache "type=registry,ref={{inputs.parameters.cache-reference}}" \
+            --export-cache "type=registry,ref={{inputs.parameters.cache-reference}},mode=max" \
+            --output type=cacheonly
+        volumeMounts:
+          - name: workspace
+            mountPath: /workspace
+          - name: registry-auth
+            mountPath: /root/.docker
+            readOnly: true
+
+    - name: build-release-image
+      inputs:
+        parameters:
+          - name: buildkit-address
+          - name: runtime-image
+          - name: image-reference
+          - name: cache-reference
+      outputs:
+        parameters:
+          - name: image-reference
+            valueFrom:
+              path: /workspace/generated/image-reference.txt
+          - name: image-digest
+            valueFrom:
+              path: /workspace/generated/image-digest.txt
+          - name: build-seconds
+            valueFrom:
+              path: /workspace/generated/build-seconds.txt
+          - name: push-seconds
+            valueFrom:
+              path: /workspace/generated/push-seconds.txt
+      script:
+        image: harbor.CHANGE_ME.internal/platform/buildkit-client-tools:1.0.0@sha256:0000000000000000000000000000000000000000000000000000000000000000 # CHANGE_ME
+        command: [sh]
+        env:
+          - name: DOCKER_CONFIG
+            value: /root/.docker
+        source: |
+          set -euo pipefail
+          mkdir -p /workspace/generated
+          start="$(date +%s)"
+          buildctl --addr "{{inputs.parameters.buildkit-address}}" build \
+            --frontend dockerfile.v0 \
+            --local context=/workspace/generated/context \
+            --local dockerfile=/workspace/generated/context \
+            --opt filename=Dockerfile \
+            --opt target=release \
+            --opt "build-arg:RUNTIME_IMAGE={{inputs.parameters.runtime-image}}" \
+            --import-cache "type=registry,ref={{inputs.parameters.cache-reference}}" \
+            --export-cache "type=registry,ref={{inputs.parameters.cache-reference}},mode=max" \
+            --output "type=image,name={{inputs.parameters.image-reference}},push=true" \
+            --metadata-file /workspace/generated/build-metadata.json
+          end="$(date +%s)"
+          digest="$(jq -r '."containerimage.digest" // ."containerimage.descriptor".digest // empty' /workspace/generated/build-metadata.json)"
+          printf '%s' "$digest" | grep -Eq '^sha256:[0-9a-f]{64}$' || { echo "BuildKit did not return a valid image digest" >&2; exit 1; }
+          printf '%s' "{{inputs.parameters.image-reference}}" > /workspace/generated/image-reference.txt
+          printf '%s' "$digest" > /workspace/generated/image-digest.txt
+          printf '%s' "$((end - start))" > /workspace/generated/build-seconds.txt
+          printf '%s' '0' > /workspace/generated/push-seconds.txt
+          printf 'pushed %s@%s\n' "{{inputs.parameters.image-reference}}" "$digest"
+        volumeMounts:
+          - name: workspace
+            mountPath: /workspace
+          - name: registry-auth
+            mountPath: /root/.docker
+            readOnly: true
+
+    - name: parse-image-digest
+      inputs:
+        parameters:
+          - name: image-digest
+      outputs:
+        parameters:
+          - name: parsed-image-digest
+            valueFrom:
+              path: /tmp/parsed-image-digest.txt
+      script:
+        image: harbor.CHANGE_ME.internal/platform/buildkit-client-tools:1.0.0@sha256:0000000000000000000000000000000000000000000000000000000000000000 # CHANGE_ME
+        command: [sh]
+        source: |
+          set -euo pipefail
+          digest="$(printf '%s' "{{inputs.parameters.image-digest}}" | grep -Eo 'sha256:[0-9a-f]{64}' | head -n 1 || true)"
+          [ -n "$digest" ] || { echo "valid image digest not found" >&2; exit 1; }
+          printf '%s' "$digest" > /tmp/parsed-image-digest.txt
+
+    - name: generate-build-report
+      inputs:
+        parameters:
+          - name: repository-name
+          - name: image-reference
+          - name: image-digest
+          - name: parent-image-digest
+          - name: runtime-image
+          - name: lock-file-name
+          - name: lock-hash
+          - name: wheel-count
+          - name: wheel-total-bytes
+          - name: wheel-download-seconds
+          - name: average-download-bytes-per-second
+          - name: zeus-before-download-total-seconds
+          - name: zeus-after-download-total-seconds
+          - name: build-seconds
+      outputs:
+        parameters:
+          - name: report-json
+            valueFrom:
+              path: /workspace/output/build-report.json
+        artifacts:
+          - name: build-report
+            path: /workspace/output/build-report.json
+            archive:
+              none: {}
+      script:
+        image: harbor.CHANGE_ME.internal/platform/buildkit-client-tools:1.0.0@sha256:0000000000000000000000000000000000000000000000000000000000000000 # CHANGE_ME
+        command: [sh]
+        source: |
+          set -euo pipefail
+          mkdir -p /workspace/output
+          jq -n \
+            --arg workflowName "{{workflow.name}}" \
+            --arg workflowUid "{{workflow.uid}}" \
+            --arg namespace "{{workflow.namespace}}" \
+            --arg repositoryName "{{inputs.parameters.repository-name}}" \
+            --arg imageReference "{{inputs.parameters.image-reference}}" \
+            --arg imageDigest "{{inputs.parameters.image-digest}}" \
+            --arg parentImageDigest "{{inputs.parameters.parent-image-digest}}" \
+            --arg runtimeImage "{{inputs.parameters.runtime-image}}" \
+            --arg lockFileName "{{inputs.parameters.lock-file-name}}" \
+            --arg lockHash "{{inputs.parameters.lock-hash}}" \
+            --argjson wheelCount "{{inputs.parameters.wheel-count}}" \
+            --argjson wheelTotalBytes "{{inputs.parameters.wheel-total-bytes}}" \
+            --argjson wheelDownloadSeconds "{{inputs.parameters.wheel-download-seconds}}" \
+            --argjson averageDownloadBytesPerSecond "{{inputs.parameters.average-download-bytes-per-second}}" \
+            --argjson zeusBeforeDownloadTotalSeconds "{{inputs.parameters.zeus-before-download-total-seconds}}" \
+            --argjson zeusAfterDownloadTotalSeconds "{{inputs.parameters.zeus-after-download-total-seconds}}" \
+            --argjson buildSeconds "{{inputs.parameters.build-seconds}}" \
+            --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{workflowName:$workflowName,workflowUid:$workflowUid,namespace:$namespace,repositoryName:$repositoryName,imageReference:$imageReference,imageDigest:$imageDigest,parentImageDigest:$parentImageDigest,runtimeImage:$runtimeImage,lockFileName:$lockFileName,lockHash:$lockHash,wheelCount:$wheelCount,wheelTotalBytes:$wheelTotalBytes,wheelDownloadSeconds:$wheelDownloadSeconds,averageDownloadBytesPerSecond:$averageDownloadBytesPerSecond,zeusBeforeDownloadTotalSeconds:$zeusBeforeDownloadTotalSeconds,zeusAfterDownloadTotalSeconds:$zeusAfterDownloadTotalSeconds,buildSeconds:$buildSeconds,packageRepository:"zeus",wheelOnly:true,status:"SUCCEEDED",timestamp:$timestamp}' \
+            > /workspace/output/build-report.json
+          jq . /workspace/output/build-report.json
+        volumeMounts:
+          - name: workspace
+            mountPath: /workspace
+
+    - name: notify-build-result
+      inputs:
+        parameters:
+          - name: notification-server-url
+          - name: report-json
+      script:
+        image: harbor.CHANGE_ME.internal/platform/curl-jq:8.8@sha256:0000000000000000000000000000000000000000000000000000000000000000 # CHANGE_ME
+        command: [sh]
+        source: |
+          set -euo pipefail
+          printf '%s\n' '{{inputs.parameters.report-json}}' | jq .
+          url='{{inputs.parameters.notification-server-url}}'
+          if [ -z "$url" ]; then
+            echo "notification-server-url is empty; notification skipped"
+            exit 0
+          fi
+          printf '%s' '{{inputs.parameters.report-json}}' > /tmp/build-report.json
+          curl --silent --show-error --fail-with-body \
+            --retry 3 --retry-all-errors \
+            --header 'Content-Type: application/json' \
+            --data-binary @/tmp/build-report.json \
+            -- "$url"

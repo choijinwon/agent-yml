@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "repositoryName",
+    "runtimeImage",
+    "parentImageDigest",
+    "lockFileName",
+    "lockHash",
+    "imageReference",
+    "cacheReference"
+  ],
+  "properties": {
+    "repositoryName": {"type": "string", "minLength": 1},
+    "runtimeImage": {"type": "string", "minLength": 1},
+    "parentImageDigest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "lockFileName": {"enum": ["requirements.lock", "requirements.txt"]},
+    "lockHash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "imageReference": {"type": "string", "minLength": 1},
+    "cacheReference": {"type": "string", "minLength": 1}
+  }
+}
