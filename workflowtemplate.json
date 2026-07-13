@@ -1,0 +1,964 @@
+{
+  "apiVersion": "argoproj.io/v1alpha1",
+  "kind": "WorkflowTemplate",
+  "metadata": {
+    "name": "run-python-image-template-with-buildkit",
+    "namespace": "argo",
+    "labels": {
+      "workflows.argoproj.io/creator": "system-serviceaccount-argo-argo-server"
+    }
+  },
+  "spec": {
+    "entrypoint": "main",
+    "serviceAccountName": "argo-kserver",
+    "arguments": {
+      "parameters": [
+        {
+          "name": "bitbucket-address-user-code",
+          "value": "git@bitbucket.CHANGE_ME.internal:project/sample-api.git"
+        },
+        {
+          "name": "runtime-image",
+          "value": "harbor.CHANGE_ME.internal/runtime/python311@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        {
+          "name": "zeus-pypi-url",
+          "value": "https://zeus.CHANGE_ME.internal/simple"
+        },
+        {
+          "name": "registry-address",
+          "value": "harbor.CHANGE_ME.internal"
+        },
+        {
+          "name": "registry-project",
+          "value": "applications"
+        },
+        {
+          "name": "image-tag",
+          "value": "1.0.0"
+        },
+        {
+          "name": "cache-registry-address",
+          "value": "harbor.CHANGE_ME.internal/build-cache"
+        },
+        {
+          "name": "buildkit-address",
+          "value": "tcp://buildkitd.CHANGE_ME.internal:1234"
+        },
+        {
+          "name": "notification-server-url",
+          "value": ""
+        }
+      ]
+    },
+    "volumeClaimTemplates": [
+      {
+        "metadata": {
+          "name": "workspace"
+        },
+        "spec": {
+          "accessModes": [
+            "ReadWriteMany"
+          ],
+          "storageClassName": "CHANGE_ME-rwx-storage",
+          "resources": {
+            "requests": {
+              "storage": "20Gi"
+            }
+          }
+        }
+      }
+    ],
+    "volumes": [
+      {
+        "name": "registry-auth",
+        "secret": {
+          "secretName": "registry-auth"
+        }
+      },
+      {
+        "name": "bitbucket-ssh",
+        "secret": {
+          "secretName": "bitbucket-ssh",
+          "defaultMode": 256
+        }
+      },
+      {
+        "name": "zeus-pypi-auth",
+        "secret": {
+          "secretName": "zeus-pypi-auth"
+        }
+      }
+    ],
+    "templates": [
+      {
+        "name": "main",
+        "dag": {
+          "tasks": [
+            {
+              "name": "get-repository-name-from-git",
+              "template": "get-repository-name-from-git",
+              "arguments": {
+                "parameters": [
+                  {
+                    "name": "git-address",
+                    "value": "{{workflow.parameters.bitbucket-address-user-code}}"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "clone-source",
+              "depends": "get-repository-name-from-git.Succeeded",
+              "template": "clone-source",
+              "arguments": {
+                "parameters": [
+                  {
+                    "name": "git-address",
+                    "value": "{{workflow.parameters.bitbucket-address-user-code}}"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "validate-runtime-image",
+              "template": "validate-runtime-image",
+              "arguments": {
+                "parameters": [
+                  {
+                    "name": "runtime-image",
+                    "value": "{{workflow.parameters.runtime-image}}"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "report-zeus-connectivity",
+              "template": "report-zeus-connectivity",
+              "arguments": {
+                "parameters": [
+                  {
+                    "name": "zeus-pypi-url",
+                    "value": "{{workflow.parameters.zeus-pypi-url}}"
+                  },
+                  {
+                    "name": "phase",
+                    "value": "before-download"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "validate-lock",
+              "depends": "clone-source.Succeeded",
+              "template": "validate-lock"
+            },
+            {
+              "name": "download-wheels",
+              "depends": "validate-lock.Succeeded && report-zeus-connectivity.Succeeded",
+              "template": "download-wheels",
+              "arguments": {
+                "parameters": [
+                  {
+                    "name": "zeus-pypi-url",
+                    "value": "{{workflow.parameters.zeus-pypi-url}}"
+                  },
+                  {
+                    "name": "lock-file-name",
+                    "value": "{{tasks.validate-lock.outputs.parameters.lock-file-name}}"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "verify-wheelhouse",
+              "depends": "download-wheels.Succeeded",
+              "template": "verify-wheelhouse",
+              "arguments": {
+                "parameters": [
+                  {
+                    "name": "lock-file-name",
+                    "value": "{{tasks.validate-lock.outputs.parameters.lock-file-name}}"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "report-zeus-after-download",
+              "depends": "download-wheels.Succeeded",
+              "template": "report-zeus-connectivity",
+              "arguments": {
+                "parameters": [
+                  {
+                    "name": "zeus-pypi-url",
+                    "value": "{{workflow.parameters.zeus-pypi-url}}"
+                  },
+                  {
+                    "name": "phase",
+                    "value": "after-download"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "prepare-build-context",
+              "depends": "validate-runtime-image.Succeeded && verify-wheelhouse.Succeeded && report-zeus-after-download.Succeeded",
+              "template": "prepare-build-context",
+              "arguments": {
+                "parameters": [
+                  {
+                    "name": "repository-name",
+                    "value": "{{tasks.get-repository-name-from-git.outputs.parameters.repository-name}}"
+                  },
+                  {
+                    "name": "runtime-image",
+                    "value": "{{tasks.validate-runtime-image.outputs.parameters.runtime-image}}"
+                  },
+                  {
+                    "name": "parent-image-digest",
+                    "value": "{{tasks.validate-runtime-image.outputs.parameters.parent-image-digest}}"
+                  },
+                  {
+                    "name": "lock-file-name",
+                    "value": "{{tasks.validate-lock.outputs.parameters.lock-file-name}}"
+                  },
+                  {
+                    "name": "lock-hash",
+                    "value": "{{tasks.validate-lock.outputs.parameters.lock-hash}}"
+                  },
+                  {
+                    "name": "image-reference",
+                    "value": "{{workflow.parameters.registry-address}}/{{workflow.parameters.registry-project}}/{{tasks.get-repository-name-from-git.outputs.parameters.repository-name}}:{{workflow.parameters.image-tag}}"
+                  },
+                  {
+                    "name": "cache-reference",
+                    "value": "{{workflow.parameters.cache-registry-address}}/{{tasks.get-repository-name-from-git.outputs.parameters.repository-name}}:buildcache"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "build-test-target",
+              "depends": "prepare-build-context.Succeeded",
+              "template": "build-test-target",
+              "arguments": {
+                "parameters": [
+                  {
+                    "name": "buildkit-address",
+                    "value": "{{workflow.parameters.buildkit-address}}"
+                  },
+                  {
+                    "name": "runtime-image",
+                    "value": "{{tasks.validate-runtime-image.outputs.parameters.runtime-image}}"
+                  },
+                  {
+                    "name": "cache-reference",
+                    "value": "{{workflow.parameters.cache-registry-address}}/{{tasks.get-repository-name-from-git.outputs.parameters.repository-name}}:buildcache"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "build-release-image",
+              "depends": "build-test-target.Succeeded",
+              "template": "build-release-image",
+              "arguments": {
+                "parameters": [
+                  {
+                    "name": "buildkit-address",
+                    "value": "{{workflow.parameters.buildkit-address}}"
+                  },
+                  {
+                    "name": "runtime-image",
+                    "value": "{{tasks.validate-runtime-image.outputs.parameters.runtime-image}}"
+                  },
+                  {
+                    "name": "image-reference",
+                    "value": "{{workflow.parameters.registry-address}}/{{workflow.parameters.registry-project}}/{{tasks.get-repository-name-from-git.outputs.parameters.repository-name}}:{{workflow.parameters.image-tag}}"
+                  },
+                  {
+                    "name": "cache-reference",
+                    "value": "{{workflow.parameters.cache-registry-address}}/{{tasks.get-repository-name-from-git.outputs.parameters.repository-name}}:buildcache"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "parse-image-digest",
+              "depends": "build-release-image.Succeeded",
+              "template": "parse-image-digest",
+              "arguments": {
+                "parameters": [
+                  {
+                    "name": "image-digest",
+                    "value": "{{tasks.build-release-image.outputs.parameters.image-digest}}"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "generate-build-report",
+              "depends": "parse-image-digest.Succeeded",
+              "template": "generate-build-report",
+              "arguments": {
+                "parameters": [
+                  {
+                    "name": "repository-name",
+                    "value": "{{tasks.get-repository-name-from-git.outputs.parameters.repository-name}}"
+                  },
+                  {
+                    "name": "image-reference",
+                    "value": "{{tasks.build-release-image.outputs.parameters.image-reference}}"
+                  },
+                  {
+                    "name": "image-digest",
+                    "value": "{{tasks.parse-image-digest.outputs.parameters.parsed-image-digest}}"
+                  },
+                  {
+                    "name": "parent-image-digest",
+                    "value": "{{tasks.validate-runtime-image.outputs.parameters.parent-image-digest}}"
+                  },
+                  {
+                    "name": "runtime-image",
+                    "value": "{{tasks.validate-runtime-image.outputs.parameters.runtime-image}}"
+                  },
+                  {
+                    "name": "lock-file-name",
+                    "value": "{{tasks.validate-lock.outputs.parameters.lock-file-name}}"
+                  },
+                  {
+                    "name": "lock-hash",
+                    "value": "{{tasks.validate-lock.outputs.parameters.lock-hash}}"
+                  },
+                  {
+                    "name": "wheel-count",
+                    "value": "{{tasks.download-wheels.outputs.parameters.wheel-count}}"
+                  },
+                  {
+                    "name": "wheel-total-bytes",
+                    "value": "{{tasks.download-wheels.outputs.parameters.wheel-total-bytes}}"
+                  },
+                  {
+                    "name": "wheel-download-seconds",
+                    "value": "{{tasks.download-wheels.outputs.parameters.download-seconds}}"
+                  },
+                  {
+                    "name": "average-download-bytes-per-second",
+                    "value": "{{tasks.download-wheels.outputs.parameters.average-download-bytes-per-second}}"
+                  },
+                  {
+                    "name": "zeus-before-download-total-seconds",
+                    "value": "{{tasks.report-zeus-connectivity.outputs.parameters.total-seconds}}"
+                  },
+                  {
+                    "name": "zeus-after-download-total-seconds",
+                    "value": "{{tasks.report-zeus-after-download.outputs.parameters.total-seconds}}"
+                  },
+                  {
+                    "name": "build-seconds",
+                    "value": "{{tasks.build-release-image.outputs.parameters.build-seconds}}"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "notify-build-result",
+              "depends": "generate-build-report.Succeeded",
+              "template": "notify-build-result",
+              "arguments": {
+                "parameters": [
+                  {
+                    "name": "notification-server-url",
+                    "value": "{{workflow.parameters.notification-server-url}}"
+                  },
+                  {
+                    "name": "report-json",
+                    "value": "{{tasks.generate-build-report.outputs.parameters.report-json}}"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "get-repository-name-from-git",
+        "inputs": {
+          "parameters": [
+            {
+              "name": "git-address"
+            }
+          ]
+        },
+        "outputs": {
+          "parameters": [
+            {
+              "name": "repository-name",
+              "valueFrom": {
+                "path": "/tmp/repository-name.txt"
+              }
+            }
+          ]
+        },
+        "script": {
+          "image": "harbor.CHANGE_ME.internal/platform/python-tools:3.11@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+          "command": [
+            "sh"
+          ],
+          "source": "set -euo pipefail\npython - <<'PY'\nimport re\nimport sys\n\naddress = r'''{{inputs.parameters.git-address}}'''.strip()\nif not address or any(c in address for c in \"\\r\\n\\0\"):\n    sys.exit(\"git-address is empty or contains a forbidden character\")\nmatch = re.search(r\"(?:[:/])([^/:]+?)(?:\\.git)?/?$\", address)\nif not match:\n    sys.exit(\"unable to extract repository name from git-address\")\nname = re.sub(r\"\\.git$\", \"\", match.group(1))\nif not re.fullmatch(r\"[A-Za-z0-9._-]+\", name):\n    sys.exit(\"repository name contains unsupported characters\")\nwith open(\"/tmp/repository-name.txt\", \"w\", encoding=\"utf-8\") as output:\n    output.write(name)\nprint(f\"repository-name={name}\")\nPY\n"
+        }
+      },
+      {
+        "name": "clone-source",
+        "inputs": {
+          "parameters": [
+            {
+              "name": "git-address"
+            }
+          ]
+        },
+        "script": {
+          "image": "harbor.CHANGE_ME.internal/platform/git-tools:2.45@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+          "command": [
+            "sh"
+          ],
+          "source": "set -euo pipefail\nrm -rf /workspace/source\nmkdir -p /workspace/source\nchmod 700 /root/.ssh\nexport GIT_SSH_COMMAND=\"ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/root/.ssh/known_hosts\"\ngit clone --depth 1 -- \"{{inputs.parameters.git-address}}\" /workspace/source\n",
+          "volumeMounts": [
+            {
+              "name": "workspace",
+              "mountPath": "/workspace"
+            },
+            {
+              "name": "bitbucket-ssh",
+              "mountPath": "/root/.ssh",
+              "readOnly": true
+            }
+          ]
+        }
+      },
+      {
+        "name": "validate-runtime-image",
+        "inputs": {
+          "parameters": [
+            {
+              "name": "runtime-image"
+            }
+          ]
+        },
+        "outputs": {
+          "parameters": [
+            {
+              "name": "runtime-image",
+              "valueFrom": {
+                "path": "/tmp/runtime-image.txt"
+              }
+            },
+            {
+              "name": "parent-image-digest",
+              "valueFrom": {
+                "path": "/tmp/parent-image-digest.txt"
+              }
+            }
+          ]
+        },
+        "script": {
+          "image": "harbor.CHANGE_ME.internal/platform/python-tools:3.11@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+          "command": [
+            "sh"
+          ],
+          "source": "set -euo pipefail\npython - <<'PY'\nimport re\nimport sys\n\nimage = r'''{{inputs.parameters.runtime-image}}'''.strip()\nif \"@\" not in image:\n    sys.exit(\"runtime-image must be pinned by digest\")\nreference, digest = image.rsplit(\"@\", 1)\nif not reference or not re.fullmatch(r\"sha256:[0-9a-f]{64}\", digest):\n    sys.exit(\"runtime-image must end with @sha256:<64 lowercase hex characters>\")\nopen(\"/tmp/runtime-image.txt\", \"w\", encoding=\"utf-8\").write(image)\nopen(\"/tmp/parent-image-digest.txt\", \"w\", encoding=\"utf-8\").write(digest)\nprint(\"runtime image digest format is valid\")\nPY\n"
+        }
+      },
+      {
+        "name": "report-zeus-connectivity",
+        "inputs": {
+          "parameters": [
+            {
+              "name": "zeus-pypi-url"
+            },
+            {
+              "name": "phase"
+            }
+          ]
+        },
+        "outputs": {
+          "parameters": [
+            {
+              "name": "report-json",
+              "valueFrom": {
+                "path": "/tmp/zeus-performance.json"
+              }
+            },
+            {
+              "name": "total-seconds",
+              "valueFrom": {
+                "path": "/tmp/total-seconds.txt"
+              }
+            },
+            {
+              "name": "http-code",
+              "valueFrom": {
+                "path": "/tmp/http-code.txt"
+              }
+            }
+          ],
+          "artifacts": [
+            {
+              "name": "zeus-performance-report",
+              "path": "/tmp/zeus-performance.json",
+              "archive": {
+                "none": {
+                }
+              }
+            }
+          ]
+        },
+        "script": {
+          "image": "harbor.CHANGE_ME.internal/platform/curl-jq:8.8@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+          "command": [
+            "sh"
+          ],
+          "env": [
+            {
+              "name": "ZEUS_USERNAME",
+              "valueFrom": {
+                "secretKeyRef": {
+                  "name": "zeus-pypi-auth",
+                  "key": "username"
+                }
+              }
+            },
+            {
+              "name": "ZEUS_PASSWORD",
+              "valueFrom": {
+                "secretKeyRef": {
+                  "name": "zeus-pypi-auth",
+                  "key": "password"
+                }
+              }
+            }
+          ],
+          "source": "set -euo pipefail\numask 077\npython - <<'PY'\nimport os\nfrom urllib.parse import urlsplit\n\nhost = urlsplit(r'''{{inputs.parameters.zeus-pypi-url}}''').hostname\nif not host:\n    raise SystemExit(\"zeus-pypi-url has no hostname\")\nwith open(\"/tmp/zeus.netrc\", \"w\", encoding=\"utf-8\") as netrc:\n    netrc.write(f\"machine {host}\\nlogin {os.environ['ZEUS_USERNAME']}\\npassword {os.environ['ZEUS_PASSWORD']}\\n\")\nPY\nchmod 600 /tmp/zeus.netrc\nformat='{\"dnsSeconds\":%{time_namelookup},\"tcpConnectSeconds\":%{time_connect},\"tlsConnectSeconds\":%{time_appconnect},\"firstByteSeconds\":%{time_starttransfer},\"totalSeconds\":%{time_total},\"downloadBytes\":%{size_download},\"downloadSpeedBytesPerSecond\":%{speed_download},\"httpCode\":%{http_code},\"remoteIp\":\"%{remote_ip}\",\"remotePort\":%{remote_port},\"redirectCount\":%{num_redirects}}'\nmetrics=\"$(curl --silent --show-error --location --fail-with-body --output /dev/null --netrc-file /tmp/zeus.netrc --write-out \"$format\" -- \"{{inputs.parameters.zeus-pypi-url}}\")\"\nrm -f /tmp/zeus.netrc\njq -n \\\n  --argjson metrics \"$metrics\" \\\n  --arg phase \"{{inputs.parameters.phase}}\" \\\n  --arg timestamp \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\" \\\n  --arg workflowName \"{{workflow.name}}\" \\\n  --arg workflowUid \"{{workflow.uid}}\" \\\n  --arg namespace \"{{workflow.namespace}}\" \\\n  '$metrics + {phase:$phase,timestamp:$timestamp,workflowName:$workflowName,workflowUid:$workflowUid,namespace:$namespace}' \\\n  > /tmp/zeus-performance.json\njq -r '.totalSeconds' /tmp/zeus-performance.json > /tmp/total-seconds.txt\njq -r '.httpCode' /tmp/zeus-performance.json > /tmp/http-code.txt\njq '{phase,totalSeconds,httpCode}' /tmp/zeus-performance.json\n"
+        }
+      },
+      {
+        "name": "validate-lock",
+        "outputs": {
+          "parameters": [
+            {
+              "name": "lock-file-name",
+              "valueFrom": {
+                "path": "/workspace/generated/lock-file-name.txt"
+              }
+            },
+            {
+              "name": "lock-hash",
+              "valueFrom": {
+                "path": "/workspace/generated/lock-hash.txt"
+              }
+            }
+          ]
+        },
+        "script": {
+          "image": "harbor.CHANGE_ME.internal/platform/python-build-tools:1.0.0@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+          "command": [
+            "sh"
+          ],
+          "source": "set -euo pipefail\nmkdir -p /workspace/generated\nif [ -f /workspace/source/requirements.lock ]; then\n  lock_file=requirements.lock\nelif [ -f /workspace/source/requirements.txt ]; then\n  lock_file=requirements.txt\n  echo \"WARNING: requirements.txt fallback is allowed for migration only; use requirements.lock in production\" >&2\nelse\n  echo \"neither requirements.lock nor requirements.txt exists\" >&2\n  exit 1\nfi\npython /opt/build-tools/scripts/validate_lock.py \"/workspace/source/$lock_file\"\nprintf '%s' \"$lock_file\" > /workspace/generated/lock-file-name.txt\nsha256sum \"/workspace/source/$lock_file\" | awk '{print $1}' > /workspace/generated/lock-hash.txt\n",
+          "volumeMounts": [
+            {
+              "name": "workspace",
+              "mountPath": "/workspace"
+            }
+          ]
+        }
+      },
+      {
+        "name": "download-wheels",
+        "synchronization": {
+          "semaphore": {
+            "configMapKeyRef": {
+              "name": "zeus-concurrency-limit",
+              "key": "wheel-downloads"
+            }
+          }
+        },
+        "inputs": {
+          "parameters": [
+            {
+              "name": "zeus-pypi-url"
+            },
+            {
+              "name": "lock-file-name"
+            }
+          ]
+        },
+        "outputs": {
+          "parameters": [
+            {
+              "name": "wheel-count",
+              "valueFrom": {
+                "path": "/workspace/generated/wheel-count.txt"
+              }
+            },
+            {
+              "name": "wheel-total-bytes",
+              "valueFrom": {
+                "path": "/workspace/generated/wheel-total-bytes.txt"
+              }
+            },
+            {
+              "name": "download-seconds",
+              "valueFrom": {
+                "path": "/workspace/generated/download-seconds.txt"
+              }
+            },
+            {
+              "name": "average-download-bytes-per-second",
+              "valueFrom": {
+                "path": "/workspace/generated/average-download-bytes-per-second.txt"
+              }
+            }
+          ]
+        },
+        "script": {
+          "image": "harbor.CHANGE_ME.internal/platform/python-build-tools:1.0.0@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+          "command": [
+            "sh"
+          ],
+          "env": [
+            {
+              "name": "ZEUS_USERNAME",
+              "valueFrom": {
+                "secretKeyRef": {
+                  "name": "zeus-pypi-auth",
+                  "key": "username"
+                }
+              }
+            },
+            {
+              "name": "ZEUS_PASSWORD",
+              "valueFrom": {
+                "secretKeyRef": {
+                  "name": "zeus-pypi-auth",
+                  "key": "password"
+                }
+              }
+            }
+          ],
+          "source": "set -euo pipefail\nrm -rf /workspace/wheelhouse\nmkdir -p /workspace/wheelhouse /workspace/generated\nstart=\"$(date +%s)\"\nPIP_INDEX_URL=\"$(python - <<'PY'\nimport os\nfrom urllib.parse import quote, urlsplit, urlunsplit\nurl = r'''{{inputs.parameters.zeus-pypi-url}}'''\nparts = urlsplit(url)\nuser = quote(os.environ['ZEUS_USERNAME'], safe='')\npassword = quote(os.environ['ZEUS_PASSWORD'], safe='')\nprint(urlunsplit((parts.scheme, f'{user}:{password}@{parts.netloc}', parts.path, parts.query, parts.fragment)))\nPY\n)\"\npython -m pip download \\\n  --index-url \"$PIP_INDEX_URL\" \\\n  --only-binary=:all: \\\n  --prefer-binary \\\n  --disable-pip-version-check \\\n  --timeout 30 \\\n  --retries 3 \\\n  --requirement \"/workspace/source/{{inputs.parameters.lock-file-name}}\" \\\n  --dest /workspace/wheelhouse\nunset PIP_INDEX_URL\nend=\"$(date +%s)\"\nseconds=\"$((end - start))\"\ncount=\"$(find /workspace/wheelhouse -type f -name '*.whl' | wc -l | tr -d ' ')\"\n[ \"$count\" -gt 0 ] || { echo \"wheelhouse is empty\" >&2; exit 1; }\nbytes=\"$(find /workspace/wheelhouse -type f -name '*.whl' -exec stat -c '%s' {} + | awk '{sum += $1} END {print sum + 0}')\"\naverage=\"$((bytes / (seconds > 0 ? seconds : 1)))\"\nprintf '%s' \"$count\" > /workspace/generated/wheel-count.txt\nprintf '%s' \"$bytes\" > /workspace/generated/wheel-total-bytes.txt\nprintf '%s' \"$seconds\" > /workspace/generated/download-seconds.txt\nprintf '%s' \"$average\" > /workspace/generated/average-download-bytes-per-second.txt\nprintf 'downloaded %s wheels (%s bytes) in %s seconds\\n' \"$count\" \"$bytes\" \"$seconds\"\n",
+          "volumeMounts": [
+            {
+              "name": "workspace",
+              "mountPath": "/workspace"
+            }
+          ]
+        }
+      },
+      {
+        "name": "verify-wheelhouse",
+        "inputs": {
+          "parameters": [
+            {
+              "name": "lock-file-name"
+            }
+          ]
+        },
+        "script": {
+          "image": "harbor.CHANGE_ME.internal/platform/python-build-tools:1.0.0@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+          "command": [
+            "sh"
+          ],
+          "source": "set -euo pipefail\nrm -rf /tmp/python-verify\npython -m pip install \\\n  --no-index \\\n  --find-links=/workspace/wheelhouse \\\n  --only-binary=:all: \\\n  --disable-pip-version-check \\\n  --target=/tmp/python-verify \\\n  --requirement \"/workspace/source/{{inputs.parameters.lock-file-name}}\"\n",
+          "volumeMounts": [
+            {
+              "name": "workspace",
+              "mountPath": "/workspace"
+            }
+          ]
+        }
+      },
+      {
+        "name": "prepare-build-context",
+        "inputs": {
+          "parameters": [
+            {
+              "name": "repository-name"
+            },
+            {
+              "name": "runtime-image"
+            },
+            {
+              "name": "parent-image-digest"
+            },
+            {
+              "name": "lock-file-name"
+            },
+            {
+              "name": "lock-hash"
+            },
+            {
+              "name": "image-reference"
+            },
+            {
+              "name": "cache-reference"
+            }
+          ]
+        },
+        "script": {
+          "image": "harbor.CHANGE_ME.internal/platform/python-build-tools:1.0.0@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+          "command": [
+            "sh"
+          ],
+          "source": "set -euo pipefail\nrm -rf /workspace/generated/context\nmkdir -p /workspace/generated/context/app /workspace/generated/context/wheelhouse\ncp -a /workspace/source/. /workspace/generated/context/app/\ncp -a /workspace/wheelhouse/. /workspace/generated/context/wheelhouse/\ncp \"/workspace/source/{{inputs.parameters.lock-file-name}}\" /workspace/generated/context/requirements.lock\ncat > /workspace/generated/build-spec.json <<'JSON'\n{\n  \"repositoryName\": \"{{inputs.parameters.repository-name}}\",\n  \"runtimeImage\": \"{{inputs.parameters.runtime-image}}\",\n  \"parentImageDigest\": \"{{inputs.parameters.parent-image-digest}}\",\n  \"lockFileName\": \"{{inputs.parameters.lock-file-name}}\",\n  \"lockHash\": \"{{inputs.parameters.lock-hash}}\",\n  \"imageReference\": \"{{inputs.parameters.image-reference}}\",\n  \"cacheReference\": \"{{inputs.parameters.cache-reference}}\"\n}\nJSON\npython /opt/build-tools/scripts/validate_build_spec.py \\\n  --schema /opt/build-tools/schemas/build-spec.schema.json \\\n  /workspace/generated/build-spec.json\npython /opt/build-tools/scripts/render_dockerfile.py \\\n  --template /opt/build-tools/templates/Dockerfile.template \\\n  --output /workspace/generated/context/Dockerfile\ncp /opt/build-tools/templates/docker-bake.hcl /workspace/generated/context/docker-bake.hcl\ntest -s /workspace/generated/context/Dockerfile\ntest -s /workspace/generated/context/docker-bake.hcl\n",
+          "volumeMounts": [
+            {
+              "name": "workspace",
+              "mountPath": "/workspace"
+            }
+          ]
+        }
+      },
+      {
+        "name": "build-test-target",
+        "inputs": {
+          "parameters": [
+            {
+              "name": "buildkit-address"
+            },
+            {
+              "name": "runtime-image"
+            },
+            {
+              "name": "cache-reference"
+            }
+          ]
+        },
+        "script": {
+          "image": "harbor.CHANGE_ME.internal/platform/buildkit-client-tools:1.0.0@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+          "command": [
+            "sh"
+          ],
+          "env": [
+            {
+              "name": "DOCKER_CONFIG",
+              "value": "/root/.docker"
+            }
+          ],
+          "source": "set -euo pipefail\nbuildctl --addr \"{{inputs.parameters.buildkit-address}}\" build \\\n  --frontend dockerfile.v0 \\\n  --local context=/workspace/generated/context \\\n  --local dockerfile=/workspace/generated/context \\\n  --opt filename=Dockerfile \\\n  --opt target=test \\\n  --opt \"build-arg:RUNTIME_IMAGE={{inputs.parameters.runtime-image}}\" \\\n  --import-cache \"type=registry,ref={{inputs.parameters.cache-reference}}\" \\\n  --export-cache \"type=registry,ref={{inputs.parameters.cache-reference}},mode=max\" \\\n  --output type=cacheonly\n",
+          "volumeMounts": [
+            {
+              "name": "workspace",
+              "mountPath": "/workspace"
+            },
+            {
+              "name": "registry-auth",
+              "mountPath": "/root/.docker",
+              "readOnly": true
+            }
+          ]
+        }
+      },
+      {
+        "name": "build-release-image",
+        "inputs": {
+          "parameters": [
+            {
+              "name": "buildkit-address"
+            },
+            {
+              "name": "runtime-image"
+            },
+            {
+              "name": "image-reference"
+            },
+            {
+              "name": "cache-reference"
+            }
+          ]
+        },
+        "outputs": {
+          "parameters": [
+            {
+              "name": "image-reference",
+              "valueFrom": {
+                "path": "/workspace/generated/image-reference.txt"
+              }
+            },
+            {
+              "name": "image-digest",
+              "valueFrom": {
+                "path": "/workspace/generated/image-digest.txt"
+              }
+            },
+            {
+              "name": "build-seconds",
+              "valueFrom": {
+                "path": "/workspace/generated/build-seconds.txt"
+              }
+            },
+            {
+              "name": "push-seconds",
+              "valueFrom": {
+                "path": "/workspace/generated/push-seconds.txt"
+              }
+            }
+          ]
+        },
+        "script": {
+          "image": "harbor.CHANGE_ME.internal/platform/buildkit-client-tools:1.0.0@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+          "command": [
+            "sh"
+          ],
+          "env": [
+            {
+              "name": "DOCKER_CONFIG",
+              "value": "/root/.docker"
+            }
+          ],
+          "source": "set -euo pipefail\nmkdir -p /workspace/generated\nstart=\"$(date +%s)\"\nbuildctl --addr \"{{inputs.parameters.buildkit-address}}\" build \\\n  --frontend dockerfile.v0 \\\n  --local context=/workspace/generated/context \\\n  --local dockerfile=/workspace/generated/context \\\n  --opt filename=Dockerfile \\\n  --opt target=release \\\n  --opt \"build-arg:RUNTIME_IMAGE={{inputs.parameters.runtime-image}}\" \\\n  --import-cache \"type=registry,ref={{inputs.parameters.cache-reference}}\" \\\n  --export-cache \"type=registry,ref={{inputs.parameters.cache-reference}},mode=max\" \\\n  --output \"type=image,name={{inputs.parameters.image-reference}},push=true\" \\\n  --metadata-file /workspace/generated/build-metadata.json\nend=\"$(date +%s)\"\ndigest=\"$(jq -r '.\"containerimage.digest\" // .\"containerimage.descriptor\".digest // empty' /workspace/generated/build-metadata.json)\"\nprintf '%s' \"$digest\" | grep -Eq '^sha256:[0-9a-f]{64}$' || { echo \"BuildKit did not return a valid image digest\" >&2; exit 1; }\nprintf '%s' \"{{inputs.parameters.image-reference}}\" > /workspace/generated/image-reference.txt\nprintf '%s' \"$digest\" > /workspace/generated/image-digest.txt\nprintf '%s' \"$((end - start))\" > /workspace/generated/build-seconds.txt\nprintf '%s' '0' > /workspace/generated/push-seconds.txt\nprintf 'pushed %s@%s\\n' \"{{inputs.parameters.image-reference}}\" \"$digest\"\n",
+          "volumeMounts": [
+            {
+              "name": "workspace",
+              "mountPath": "/workspace"
+            },
+            {
+              "name": "registry-auth",
+              "mountPath": "/root/.docker",
+              "readOnly": true
+            }
+          ]
+        }
+      },
+      {
+        "name": "parse-image-digest",
+        "inputs": {
+          "parameters": [
+            {
+              "name": "image-digest"
+            }
+          ]
+        },
+        "outputs": {
+          "parameters": [
+            {
+              "name": "parsed-image-digest",
+              "valueFrom": {
+                "path": "/tmp/parsed-image-digest.txt"
+              }
+            }
+          ]
+        },
+        "script": {
+          "image": "harbor.CHANGE_ME.internal/platform/buildkit-client-tools:1.0.0@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+          "command": [
+            "sh"
+          ],
+          "source": "set -euo pipefail\ndigest=\"$(printf '%s' \"{{inputs.parameters.image-digest}}\" | grep -Eo 'sha256:[0-9a-f]{64}' | head -n 1 || true)\"\n[ -n \"$digest\" ] || { echo \"valid image digest not found\" >&2; exit 1; }\nprintf '%s' \"$digest\" > /tmp/parsed-image-digest.txt\n"
+        }
+      },
+      {
+        "name": "generate-build-report",
+        "inputs": {
+          "parameters": [
+            {
+              "name": "repository-name"
+            },
+            {
+              "name": "image-reference"
+            },
+            {
+              "name": "image-digest"
+            },
+            {
+              "name": "parent-image-digest"
+            },
+            {
+              "name": "runtime-image"
+            },
+            {
+              "name": "lock-file-name"
+            },
+            {
+              "name": "lock-hash"
+            },
+            {
+              "name": "wheel-count"
+            },
+            {
+              "name": "wheel-total-bytes"
+            },
+            {
+              "name": "wheel-download-seconds"
+            },
+            {
+              "name": "average-download-bytes-per-second"
+            },
+            {
+              "name": "zeus-before-download-total-seconds"
+            },
+            {
+              "name": "zeus-after-download-total-seconds"
+            },
+            {
+              "name": "build-seconds"
+            }
+          ]
+        },
+        "outputs": {
+          "parameters": [
+            {
+              "name": "report-json",
+              "valueFrom": {
+                "path": "/workspace/output/build-report.json"
+              }
+            }
+          ],
+          "artifacts": [
+            {
+              "name": "build-report",
+              "path": "/workspace/output/build-report.json",
+              "archive": {
+                "none": {
+                }
+              }
+            }
+          ]
+        },
+        "script": {
+          "image": "harbor.CHANGE_ME.internal/platform/buildkit-client-tools:1.0.0@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+          "command": [
+            "sh"
+          ],
+          "source": "set -euo pipefail\nmkdir -p /workspace/output\njq -n \\\n  --arg workflowName \"{{workflow.name}}\" \\\n  --arg workflowUid \"{{workflow.uid}}\" \\\n  --arg namespace \"{{workflow.namespace}}\" \\\n  --arg repositoryName \"{{inputs.parameters.repository-name}}\" \\\n  --arg imageReference \"{{inputs.parameters.image-reference}}\" \\\n  --arg imageDigest \"{{inputs.parameters.image-digest}}\" \\\n  --arg parentImageDigest \"{{inputs.parameters.parent-image-digest}}\" \\\n  --arg runtimeImage \"{{inputs.parameters.runtime-image}}\" \\\n  --arg lockFileName \"{{inputs.parameters.lock-file-name}}\" \\\n  --arg lockHash \"{{inputs.parameters.lock-hash}}\" \\\n  --argjson wheelCount \"{{inputs.parameters.wheel-count}}\" \\\n  --argjson wheelTotalBytes \"{{inputs.parameters.wheel-total-bytes}}\" \\\n  --argjson wheelDownloadSeconds \"{{inputs.parameters.wheel-download-seconds}}\" \\\n  --argjson averageDownloadBytesPerSecond \"{{inputs.parameters.average-download-bytes-per-second}}\" \\\n  --argjson zeusBeforeDownloadTotalSeconds \"{{inputs.parameters.zeus-before-download-total-seconds}}\" \\\n  --argjson zeusAfterDownloadTotalSeconds \"{{inputs.parameters.zeus-after-download-total-seconds}}\" \\\n  --argjson buildSeconds \"{{inputs.parameters.build-seconds}}\" \\\n  --arg timestamp \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\" \\\n  '{workflowName:$workflowName,workflowUid:$workflowUid,namespace:$namespace,repositoryName:$repositoryName,imageReference:$imageReference,imageDigest:$imageDigest,parentImageDigest:$parentImageDigest,runtimeImage:$runtimeImage,lockFileName:$lockFileName,lockHash:$lockHash,wheelCount:$wheelCount,wheelTotalBytes:$wheelTotalBytes,wheelDownloadSeconds:$wheelDownloadSeconds,averageDownloadBytesPerSecond:$averageDownloadBytesPerSecond,zeusBeforeDownloadTotalSeconds:$zeusBeforeDownloadTotalSeconds,zeusAfterDownloadTotalSeconds:$zeusAfterDownloadTotalSeconds,buildSeconds:$buildSeconds,packageRepository:\"zeus\",wheelOnly:true,status:\"SUCCEEDED\",timestamp:$timestamp}' \\\n  > /workspace/output/build-report.json\njq . /workspace/output/build-report.json\n",
+          "volumeMounts": [
+            {
+              "name": "workspace",
+              "mountPath": "/workspace"
+            }
+          ]
+        }
+      },
+      {
+        "name": "notify-build-result",
+        "inputs": {
+          "parameters": [
+            {
+              "name": "notification-server-url"
+            },
+            {
+              "name": "report-json"
+            }
+          ]
+        },
+        "script": {
+          "image": "harbor.CHANGE_ME.internal/platform/curl-jq:8.8@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+          "command": [
+            "sh"
+          ],
+          "source": "set -euo pipefail\nprintf '%s\\n' '{{inputs.parameters.report-json}}' | jq .\nurl='{{inputs.parameters.notification-server-url}}'\nif [ -z \"$url\" ]; then\n  echo \"notification-server-url is empty; notification skipped\"\n  exit 0\nfi\nprintf '%s' '{{inputs.parameters.report-json}}' > /tmp/build-report.json\ncurl --silent --show-error --fail-with-body \\\n  --retry 3 --retry-all-errors \\\n  --header 'Content-Type: application/json' \\\n  --data-binary @/tmp/build-report.json \\\n  -- \"$url\"\n"
+        }
+      }
+    ]
+  }
+}
