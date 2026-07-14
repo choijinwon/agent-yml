@@ -47,37 +47,103 @@
             {
               "name": "dockerfile-content",
               "valueFrom": {
-                "parameter": "{{tasks.git-clone-change-dockerfile-and-build-docker.outputs.parameters.dockerfile-content}}"
+                "parameter": "{{tasks.prepare-docker-layer-structure.outputs.parameters.dockerfile-content}}"
               }
             },
             {
-              "name": "zeus-speed-report",
+              "name": "docker-layer-stages",
               "valueFrom": {
-                "parameter": "{{tasks.check-zeus-speed.outputs.parameters.report-json}}"
+                "parameter": "{{tasks.prepare-docker-layer-structure.outputs.parameters.docker-layer-stages}}"
               }
             },
             {
-              "name": "zeus-total-seconds",
+              "name": "nexus-speed-report",
               "valueFrom": {
-                "parameter": "{{tasks.check-zeus-speed.outputs.parameters.total-seconds}}"
+                "parameter": "{{tasks.check-nexus-speed.outputs.parameters.report-json}}"
               }
             },
             {
-              "name": "zeus-download-bytes",
+              "name": "nexus-total-seconds",
               "valueFrom": {
-                "parameter": "{{tasks.check-zeus-speed.outputs.parameters.download-bytes}}"
+                "parameter": "{{tasks.check-nexus-speed.outputs.parameters.total-seconds}}"
               }
             },
             {
-              "name": "zeus-download-speed-bytes-per-second",
+              "name": "nexus-download-bytes",
               "valueFrom": {
-                "parameter": "{{tasks.check-zeus-speed.outputs.parameters.download-speed-bytes-per-second}}"
+                "parameter": "{{tasks.check-nexus-speed.outputs.parameters.download-bytes}}"
               }
             },
             {
-              "name": "zeus-speed-status",
+              "name": "nexus-download-speed-bytes-per-second",
               "valueFrom": {
-                "parameter": "{{tasks.check-zeus-speed.outputs.parameters.speed-status}}"
+                "parameter": "{{tasks.check-nexus-speed.outputs.parameters.download-speed-bytes-per-second}}"
+              }
+            },
+            {
+              "name": "nexus-speed-status",
+              "valueFrom": {
+                "parameter": "{{tasks.check-nexus-speed.outputs.parameters.speed-status}}"
+              }
+            },
+            {
+              "name": "bitbucket-network-report",
+              "valueFrom": {
+                "parameter": "{{tasks.check-bitbucket-network.outputs.parameters.report-json}}"
+              }
+            },
+            {
+              "name": "buildkit-network-report",
+              "valueFrom": {
+                "parameter": "{{tasks.check-buildkit-network.outputs.parameters.report-json}}"
+              }
+            },
+            {
+              "name": "registry-network-report",
+              "valueFrom": {
+                "parameter": "{{tasks.check-registry-network.outputs.parameters.report-json}}"
+              }
+            },
+            {
+              "name": "container-io-report",
+              "valueFrom": {
+                "parameter": "{{tasks.check-container-io.outputs.parameters.report-json}}"
+              }
+            },
+            {
+              "name": "bottleneck-report",
+              "valueFrom": {
+                "parameter": "{{tasks.summarize-bottlenecks.outputs.parameters.report-json}}"
+              }
+            },
+            {
+              "name": "bottleneck-status",
+              "valueFrom": {
+                "parameter": "{{tasks.summarize-bottlenecks.outputs.parameters.bottleneck-status}}"
+              }
+            },
+            {
+              "name": "bottleneck-components",
+              "valueFrom": {
+                "parameter": "{{tasks.summarize-bottlenecks.outputs.parameters.slow-components}}"
+              }
+            },
+            {
+              "name": "dag-bottleneck-report",
+              "valueFrom": {
+                "parameter": "{{tasks.analyze-dag-bottleneck.outputs.parameters.report-json}}"
+              }
+            },
+            {
+              "name": "dag-bottleneck-status",
+              "valueFrom": {
+                "parameter": "{{tasks.analyze-dag-bottleneck.outputs.parameters.status}}"
+              }
+            },
+            {
+              "name": "dag-slow-tasks",
+              "valueFrom": {
+                "parameter": "{{tasks.analyze-dag-bottleneck.outputs.parameters.slow-tasks}}"
               }
             }
           ],
@@ -108,27 +174,191 @@
               }
             },
             {
-              "name": "check-zeus-speed",
-              "template": "check-zeus-speed",
+              "name": "check-nexus-speed",
+              "template": "check-nexus-speed",
               "arguments": {
                 "parameters": [
                   {
-                    "name": "zeus-pypi-url",
-                    "value": "{{workflow.parameters.zeus-pypi-url}}"
+                    "name": "nexus-pypi-url",
+                    "value": "{{workflow.parameters.nexus-pypi-url}}"
+                  },
+                  {
+                    "name": "nexus-speed-test-url",
+                    "value": "{{workflow.parameters.nexus-speed-test-url}}"
                   },
                   {
                     "name": "slow-threshold-seconds",
-                    "value": "{{workflow.parameters.zeus-slow-threshold-seconds}}"
+                    "value": "{{workflow.parameters.nexus-slow-threshold-seconds}}"
+                  },
+                  {
+                    "name": "min-download-bytes-per-second",
+                    "value": "{{workflow.parameters.nexus-min-download-bytes-per-second}}"
+                  },
+                  {
+                    "name": "sample-bytes",
+                    "value": "{{workflow.parameters.nexus-speed-sample-bytes}}"
                   }
                 ]
               }
+            },
+            {
+              "name": "check-bitbucket-network",
+              "template": "check-network-endpoint",
+              "arguments": {
+                "parameters": [
+                  {
+                    "name": "component-name",
+                    "value": "bitbucket"
+                  },
+                  {
+                    "name": "endpoint-address",
+                    "value": "{{workflow.parameters.bitbucket-address-user-code}}"
+                  },
+                  {
+                    "name": "default-port",
+                    "value": "22"
+                  },
+                  {
+                    "name": "slow-threshold-seconds",
+                    "value": "{{workflow.parameters.bottleneck-network-slow-threshold-seconds}}"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "check-buildkit-network",
+              "template": "check-network-endpoint",
+              "arguments": {
+                "parameters": [
+                  {
+                    "name": "component-name",
+                    "value": "buildkit"
+                  },
+                  {
+                    "name": "endpoint-address",
+                    "value": "{{workflow.parameters.buildkit-address}}"
+                  },
+                  {
+                    "name": "default-port",
+                    "value": "1234"
+                  },
+                  {
+                    "name": "slow-threshold-seconds",
+                    "value": "{{workflow.parameters.bottleneck-network-slow-threshold-seconds}}"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "check-registry-network",
+              "template": "check-network-endpoint",
+              "arguments": {
+                "parameters": [
+                  {
+                    "name": "component-name",
+                    "value": "harbor-registry"
+                  },
+                  {
+                    "name": "endpoint-address",
+                    "value": "{{workflow.parameters.registry-address}}"
+                  },
+                  {
+                    "name": "default-port",
+                    "value": "443"
+                  },
+                  {
+                    "name": "slow-threshold-seconds",
+                    "value": "{{workflow.parameters.bottleneck-network-slow-threshold-seconds}}"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "check-container-io",
+              "template": "check-container-io",
+              "arguments": {
+                "parameters": [
+                  {
+                    "name": "test-bytes",
+                    "value": "{{workflow.parameters.bottleneck-io-test-bytes}}"
+                  },
+                  {
+                    "name": "min-bytes-per-second",
+                    "value": "{{workflow.parameters.bottleneck-io-min-bytes-per-second}}"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "summarize-bottlenecks",
+              "template": "summarize-bottlenecks",
+              "dependencies": [
+                "check-nexus-speed",
+                "check-bitbucket-network",
+                "check-buildkit-network",
+                "check-registry-network",
+                "check-container-io"
+              ],
+              "arguments": {
+                "parameters": [
+                  {
+                    "name": "nexus-status",
+                    "value": "{{tasks.check-nexus-speed.outputs.parameters.speed-status}}"
+                  },
+                  {
+                    "name": "nexus-download-speed",
+                    "value": "{{tasks.check-nexus-speed.outputs.parameters.download-speed-bytes-per-second}}"
+                  },
+                  {
+                    "name": "bitbucket-status",
+                    "value": "{{tasks.check-bitbucket-network.outputs.parameters.status}}"
+                  },
+                  {
+                    "name": "bitbucket-total-seconds",
+                    "value": "{{tasks.check-bitbucket-network.outputs.parameters.total-seconds}}"
+                  },
+                  {
+                    "name": "buildkit-status",
+                    "value": "{{tasks.check-buildkit-network.outputs.parameters.status}}"
+                  },
+                  {
+                    "name": "buildkit-total-seconds",
+                    "value": "{{tasks.check-buildkit-network.outputs.parameters.total-seconds}}"
+                  },
+                  {
+                    "name": "registry-status",
+                    "value": "{{tasks.check-registry-network.outputs.parameters.status}}"
+                  },
+                  {
+                    "name": "registry-total-seconds",
+                    "value": "{{tasks.check-registry-network.outputs.parameters.total-seconds}}"
+                  },
+                  {
+                    "name": "container-io-status",
+                    "value": "{{tasks.check-container-io.outputs.parameters.status}}"
+                  },
+                  {
+                    "name": "container-write-speed",
+                    "value": "{{tasks.check-container-io.outputs.parameters.write-bytes-per-second}}"
+                  },
+                  {
+                    "name": "container-read-speed",
+                    "value": "{{tasks.check-container-io.outputs.parameters.read-bytes-per-second}}"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "prepare-docker-layer-structure",
+              "template": "prepare-docker-layer-structure"
             },
             {
               "name": "git-clone-change-dockerfile-and-build-docker",
               "template": "git-clone-change-dockerfile-and-build-docker",
               "dependencies": [
                 "get-repository-name-from-git",
-                "check-zeus-speed"
+                "summarize-bottlenecks",
+                "prepare-docker-layer-structure"
               ],
               "arguments": {
                 "parameters": [
@@ -163,6 +393,24 @@
                   {
                     "name": "image-tag",
                     "value": "{{workflow.parameters.image-tag}}"
+                  },
+                  {
+                    "name": "buildkit-address",
+                    "value": "{{workflow.parameters.buildkit-address}}"
+                  },
+                  {
+                    "name": "nexus-pypi-url",
+                    "value": "{{workflow.parameters.nexus-pypi-url}}"
+                  },
+                  {
+                    "name": "runtime-image",
+                    "value": "{{workflow.parameters.runtime-image}}"
+                  }
+                ],
+                "artifacts": [
+                  {
+                    "name": "dockerfile",
+                    "from": "{{tasks.prepare-docker-layer-structure.outputs.artifacts.dockerfile}}"
                   }
                 ]
               }
@@ -183,11 +431,25 @@
               }
             },
             {
+              "name": "analyze-dag-bottleneck",
+              "template": "analyze-dag-bottleneck",
+              "dependencies": [
+                "parse-image-digest"
+              ],
+              "arguments": {
+                "parameters": [
+                  {
+                    "name": "slow-threshold-seconds",
+                    "value": "{{workflow.parameters.dag-task-slow-threshold-seconds}}"
+                  }
+                ]
+              }
+            },
+            {
               "name": "send-http-request",
               "template": "notify-server",
               "dependencies": [
-                "git-clone-change-dockerfile-and-build-docker",
-                "parse-image-digest"
+                "analyze-dag-bottleneck"
               ],
               "arguments": {
                 "parameters": [
@@ -202,6 +464,10 @@
                   {
                     "name": "image-reference",
                     "value": "{{workflow.parameters.registry-address}}/{{workflow.parameters.registry-project}}/{{workflow.parameters.image-name}}:{{workflow.parameters.image-tag}}"
+                  },
+                  {
+                    "name": "dag-bottleneck-report",
+                    "value": "{{tasks.analyze-dag-bottleneck.outputs.parameters.report-json}}"
                   }
                 ]
               }
@@ -249,14 +515,23 @@
         }
       },
       {
-        "name": "check-zeus-speed",
+        "name": "check-nexus-speed",
         "inputs": {
           "parameters": [
             {
-              "name": "zeus-pypi-url"
+              "name": "nexus-pypi-url"
+            },
+            {
+              "name": "nexus-speed-test-url"
             },
             {
               "name": "slow-threshold-seconds"
+            },
+            {
+              "name": "min-download-bytes-per-second"
+            },
+            {
+              "name": "sample-bytes"
             }
           ]
         },
@@ -265,38 +540,38 @@
             {
               "name": "report-json",
               "valueFrom": {
-                "path": "/tmp/zeus-speed-report.json"
+                "path": "/tmp/nexus-speed-report.json"
               }
             },
             {
               "name": "total-seconds",
               "valueFrom": {
-                "path": "/tmp/zeus-total-seconds.txt"
+                "path": "/tmp/nexus-total-seconds.txt"
               }
             },
             {
               "name": "download-bytes",
               "valueFrom": {
-                "path": "/tmp/zeus-download-bytes.txt"
+                "path": "/tmp/nexus-download-bytes.txt"
               }
             },
             {
               "name": "download-speed-bytes-per-second",
               "valueFrom": {
-                "path": "/tmp/zeus-download-speed.txt"
+                "path": "/tmp/nexus-download-speed.txt"
               }
             },
             {
               "name": "speed-status",
               "valueFrom": {
-                "path": "/tmp/zeus-speed-status.txt"
+                "path": "/tmp/nexus-speed-status.txt"
               }
             }
           ],
           "artifacts": [
             {
-              "name": "zeus-speed-report",
-              "path": "/tmp/zeus-speed-report.json",
+              "name": "nexus-speed-report",
+              "path": "/tmp/nexus-speed-report.json",
               "archive": {
                 "none": {}
               }
@@ -311,27 +586,259 @@
             "run",
             "python"
           ],
-          "env": [
+          "source": "import json\nimport time\nimport urllib.request\nfrom datetime import datetime, timezone\nfrom urllib.parse import urlsplit\n\npypi_url = r'''{{inputs.parameters.nexus-pypi-url}}'''.strip()\nspeed_test_url = r'''{{inputs.parameters.nexus-speed-test-url}}'''.strip()\ntest_url = speed_test_url or pypi_url\nslow_threshold = float(r'''{{inputs.parameters.slow-threshold-seconds}}''')\nmin_download_speed = float(r'''{{inputs.parameters.min-download-bytes-per-second}}''')\nsample_bytes = int(r'''{{inputs.parameters.sample-bytes}}''')\n\nif not test_url.startswith(('http://', 'https://')):\n    raise ValueError('Nexus test URL must start with http:// or https://')\nif slow_threshold <= 0:\n    raise ValueError('slow-threshold-seconds must be greater than zero')\nif min_download_speed < 0:\n    raise ValueError('min-download-bytes-per-second cannot be negative')\nif sample_bytes <= 0:\n    raise ValueError('sample-bytes must be greater than zero')\n\nrequest = urllib.request.Request(\n    test_url,\n    headers={'User-Agent': 'argo-nexus-speed-check/2.0'}\n)\n\nstarted = time.perf_counter()\ndownload_bytes = 0\nwith urllib.request.urlopen(request, timeout=30) as response:\n    http_status = response.status\n    while download_bytes < sample_bytes:\n        chunk = response.read(min(65536, sample_bytes - download_bytes))\n        if not chunk:\n            break\n        download_bytes += len(chunk)\n\ntotal_seconds = time.perf_counter() - started\ndownload_speed = download_bytes / max(total_seconds, 0.001)\n\nslow_reasons = []\nif total_seconds > slow_threshold:\n    slow_reasons.append('TOTAL_TIME_EXCEEDED')\nif download_speed < min_download_speed:\n    slow_reasons.append('DOWNLOAD_SPEED_BELOW_MINIMUM')\nspeed_status = 'SLOW' if slow_reasons else 'OK'\n\nparts = urlsplit(test_url)\nreport = {\n    'timestamp': datetime.now(timezone.utc).isoformat(),\n    'host': parts.hostname,\n    'path': parts.path,\n    'authentication': 'ANONYMOUS',\n    'httpStatus': http_status,\n    'totalSeconds': round(total_seconds, 6),\n    'downloadBytes': download_bytes,\n    'sampleBytes': sample_bytes,\n    'sampleLimitReached': download_bytes >= sample_bytes,\n    'downloadSpeedBytesPerSecond': round(download_speed, 2),\n    'slowThresholdSeconds': slow_threshold,\n    'minDownloadBytesPerSecond': min_download_speed,\n    'speedStatus': speed_status,\n    'slowReasons': slow_reasons\n}\n\nwith open('/tmp/nexus-speed-report.json', 'w', encoding='utf-8') as file:\n    json.dump(report, file, ensure_ascii=False, separators=(',', ':'))\nwith open('/tmp/nexus-total-seconds.txt', 'w', encoding='utf-8') as file:\n    file.write(str(report['totalSeconds']))\nwith open('/tmp/nexus-download-bytes.txt', 'w', encoding='utf-8') as file:\n    file.write(str(download_bytes))\nwith open('/tmp/nexus-download-speed.txt', 'w', encoding='utf-8') as file:\n    file.write(str(report['downloadSpeedBytesPerSecond']))\nwith open('/tmp/nexus-speed-status.txt', 'w', encoding='utf-8') as file:\n    file.write(speed_status)\n\nprint(json.dumps(report, ensure_ascii=False))\n"
+        }
+      },
+      {
+        "name": "prepare-docker-layer-structure",
+        "inputs": {},
+        "outputs": {
+          "parameters": [
             {
-              "name": "ZEUS_USERNAME",
+              "name": "dockerfile-content",
               "valueFrom": {
-                "secretKeyRef": {
-                  "name": "zeus-pypi-auth",
-                  "key": "username"
-                }
+                "path": "/tmp/Dockerfile"
               }
             },
             {
-              "name": "ZEUS_PASSWORD",
+              "name": "docker-layer-stages",
               "valueFrom": {
-                "secretKeyRef": {
-                  "name": "zeus-pypi-auth",
-                  "key": "password"
-                }
+                "path": "/tmp/docker-layer-stages.txt"
               }
             }
           ],
-          "source": "import base64\nimport json\nimport os\nimport time\nimport urllib.request\nfrom datetime import datetime, timezone\nfrom urllib.parse import urlsplit\n\nurl = r'''{{inputs.parameters.zeus-pypi-url}}'''.strip()\nthreshold = float(r'''{{inputs.parameters.slow-threshold-seconds}}''')\nif not url.startswith(('http://', 'https://')):\n    raise ValueError('zeus-pypi-url must start with http:// or https://')\nif threshold <= 0:\n    raise ValueError('slow-threshold-seconds must be greater than zero')\n\nusername = os.environ['ZEUS_USERNAME']\npassword = os.environ['ZEUS_PASSWORD']\ntoken = base64.b64encode(f'{username}:{password}'.encode()).decode()\nrequest = urllib.request.Request(\n    url,\n    headers={\n        'Authorization': f'Basic {token}',\n        'User-Agent': 'argo-zeus-speed-check/1.0'\n    }\n)\n\nstarted = time.perf_counter()\nwith urllib.request.urlopen(request, timeout=30) as response:\n    http_status = response.status\n    body = response.read()\ntotal_seconds = time.perf_counter() - started\ndownload_bytes = len(body)\ndownload_speed = download_bytes / max(total_seconds, 0.001)\nspeed_status = 'OK' if total_seconds <= threshold else 'SLOW'\n\nreport = {\n    'timestamp': datetime.now(timezone.utc).isoformat(),\n    'host': urlsplit(url).hostname,\n    'httpStatus': http_status,\n    'totalSeconds': round(total_seconds, 6),\n    'downloadBytes': download_bytes,\n    'downloadSpeedBytesPerSecond': round(download_speed, 2),\n    'slowThresholdSeconds': threshold,\n    'speedStatus': speed_status\n}\n\nwith open('/tmp/zeus-speed-report.json', 'w', encoding='utf-8') as file:\n    json.dump(report, file, ensure_ascii=False, separators=(',', ':'))\nwith open('/tmp/zeus-total-seconds.txt', 'w', encoding='utf-8') as file:\n    file.write(str(report['totalSeconds']))\nwith open('/tmp/zeus-download-bytes.txt', 'w', encoding='utf-8') as file:\n    file.write(str(download_bytes))\nwith open('/tmp/zeus-download-speed.txt', 'w', encoding='utf-8') as file:\n    file.write(str(report['downloadSpeedBytesPerSecond']))\nwith open('/tmp/zeus-speed-status.txt', 'w', encoding='utf-8') as file:\n    file.write(speed_status)\n\nprint(json.dumps(report, ensure_ascii=False))\n"
+          "artifacts": [
+            {
+              "name": "dockerfile",
+              "path": "/tmp/Dockerfile",
+              "archive": {
+                "none": {}
+              }
+            }
+          ]
+        },
+        "metadata": {},
+        "script": {
+          "image": "harbor-srep01.ttttt.com/aistudio/ubuntu2404-uv-py39-py314-wf-py313:0.0.6",
+          "command": [
+            "/usr/local/bin/uv",
+            "run",
+            "python"
+          ],
+          "source": "from pathlib import Path\n\ndockerfile = r'''# syntax=docker/dockerfile:1.7\nARG RUNTIME_IMAGE\n\n# Layer 1: Digest로 고정된 공통 Runtime Base\nFROM ${RUNTIME_IMAGE} AS base\nENV PYTHONDONTWRITEBYTECODE=1 \\\n    PYTHONUNBUFFERED=1 \\\n    PIP_DISABLE_PIP_VERSION_CHECK=1\nWORKDIR /app\n\n# Layer 2-4: Lock과 Wheelhouse를 소스보다 먼저 복사하여 Dependency Cache 유지\nFROM base AS dependencies\nCOPY requirements.lock /build/requirements.lock\nCOPY wheelhouse /build/wheelhouse\nRUN python -m pip install \\\n      --no-index \\\n      --find-links=/build/wheelhouse \\\n      --only-binary=:all: \\\n      --prefix=/opt/python-dependencies \\\n      -r /build/requirements.lock \\\n    && rm -rf /root/.cache/pip\n\n# Test Layer: 검증 전용이며 Release Image로 Push하지 않음\nFROM base AS test\nCOPY --from=dependencies /opt/python-dependencies/ /usr/local/\nCOPY app /app\nRUN python -m compileall -q /app \\\n    && if [ -d /app/tests ]; then python -m pytest -q /app/tests; fi\n\n# Source Layer: 자주 변경되는 Application Source를 Dependency 다음에 배치\nFROM base AS source-clean\nCOPY app /clean-app\nRUN rm -rf /clean-app/tests /clean-app/test /clean-app/.git \\\n    /clean-app/.pytest_cache /clean-app/.mypy_cache /clean-app/.ruff_cache\n\n# Release Layer: Dependency와 정리된 실행 소스만 포함\nFROM base AS release\nCOPY --from=dependencies /opt/python-dependencies/ /usr/local/\nCOPY --from=source-clean /clean-app /app\nUSER 10001:10001\nCMD [\"python\", \"-m\", \"app\"]\n'''\n\nPath('/tmp/Dockerfile').write_text(dockerfile, encoding='utf-8')\nPath('/tmp/docker-layer-stages.txt').write_text(\n    'base,dependencies,test,source-clean,release',\n    encoding='utf-8'\n)\nprint('Docker layers: base -> dependencies -> test -> source-clean -> release')\n"
+        }
+      },
+      {
+        "name": "check-network-endpoint",
+        "inputs": {
+          "parameters": [
+            {
+              "name": "component-name"
+            },
+            {
+              "name": "endpoint-address"
+            },
+            {
+              "name": "default-port"
+            },
+            {
+              "name": "slow-threshold-seconds"
+            }
+          ]
+        },
+        "outputs": {
+          "parameters": [
+            {
+              "name": "report-json",
+              "valueFrom": {
+                "path": "/tmp/network-report.json"
+              }
+            },
+            {
+              "name": "dns-seconds",
+              "valueFrom": {
+                "path": "/tmp/dns-seconds.txt"
+              }
+            },
+            {
+              "name": "tcp-connect-seconds",
+              "valueFrom": {
+                "path": "/tmp/tcp-connect-seconds.txt"
+              }
+            },
+            {
+              "name": "total-seconds",
+              "valueFrom": {
+                "path": "/tmp/network-total-seconds.txt"
+              }
+            },
+            {
+              "name": "status",
+              "valueFrom": {
+                "path": "/tmp/network-status.txt"
+              }
+            }
+          ],
+          "artifacts": [
+            {
+              "name": "network-report",
+              "path": "/tmp/network-report.json",
+              "archive": {
+                "none": {}
+              }
+            }
+          ]
+        },
+        "metadata": {},
+        "script": {
+          "image": "harbor-srep01.ttttt.com/aistudio/ubuntu2404-uv-py39-py314-wf-py313:0.0.6",
+          "command": [
+            "/usr/local/bin/uv",
+            "run",
+            "python"
+          ],
+          "source": "import json\nimport re\nimport socket\nimport time\nfrom datetime import datetime, timezone\nfrom urllib.parse import urlsplit\n\ncomponent = r'''{{inputs.parameters.component-name}}'''.strip()\naddress = r'''{{inputs.parameters.endpoint-address}}'''.strip()\ndefault_port = int(r'''{{inputs.parameters.default-port}}''')\nslow_threshold = float(r'''{{inputs.parameters.slow-threshold-seconds}}''')\n\nif not component or not address:\n    raise ValueError('component-name and endpoint-address are required')\nif default_port <= 0 or default_port > 65535:\n    raise ValueError('default-port is invalid')\nif slow_threshold <= 0:\n    raise ValueError('slow-threshold-seconds must be greater than zero')\n\ndef parse_host_port(value, fallback_port):\n    if '://' in value:\n        parsed = urlsplit(value)\n        return parsed.hostname, parsed.port or fallback_port\n    ssh_match = re.match(r'^(?:[^@]+@)?([^:/]+)(?::(?![0-9]+$).*)?$', value)\n    if ssh_match and ('@' in value or ':' in value):\n        return ssh_match.group(1), fallback_port\n    candidate = value.split('/', 1)[0]\n    if candidate.count(':') == 1:\n        host, possible_port = candidate.rsplit(':', 1)\n        if possible_port.isdigit():\n            return host, int(possible_port)\n    return candidate, fallback_port\n\nhost, port = parse_host_port(address, default_port)\nif not host:\n    raise ValueError('unable to extract endpoint host')\n\ndns_started = time.perf_counter()\naddresses = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)\ndns_seconds = time.perf_counter() - dns_started\nif not addresses:\n    raise RuntimeError('DNS returned no address')\n\ntcp_started = time.perf_counter()\nwith socket.create_connection((host, port), timeout=10):\n    pass\ntcp_seconds = time.perf_counter() - tcp_started\ntotal_seconds = dns_seconds + tcp_seconds\nstatus = 'SLOW' if total_seconds > slow_threshold else 'OK'\n\nreport = {\n    'timestamp': datetime.now(timezone.utc).isoformat(),\n    'component': component,\n    'host': host,\n    'port': port,\n    'dnsSeconds': round(dns_seconds, 6),\n    'tcpConnectSeconds': round(tcp_seconds, 6),\n    'totalSeconds': round(total_seconds, 6),\n    'slowThresholdSeconds': slow_threshold,\n    'status': status\n}\n\nopen('/tmp/network-report.json', 'w', encoding='utf-8').write(\n    json.dumps(report, ensure_ascii=False, separators=(',', ':'))\n)\nopen('/tmp/dns-seconds.txt', 'w', encoding='utf-8').write(str(report['dnsSeconds']))\nopen('/tmp/tcp-connect-seconds.txt', 'w', encoding='utf-8').write(str(report['tcpConnectSeconds']))\nopen('/tmp/network-total-seconds.txt', 'w', encoding='utf-8').write(str(report['totalSeconds']))\nopen('/tmp/network-status.txt', 'w', encoding='utf-8').write(status)\nprint(json.dumps(report, ensure_ascii=False))\n"
+        }
+      },
+      {
+        "name": "check-container-io",
+        "inputs": {
+          "parameters": [
+            {
+              "name": "test-bytes"
+            },
+            {
+              "name": "min-bytes-per-second"
+            }
+          ]
+        },
+        "outputs": {
+          "parameters": [
+            {
+              "name": "report-json",
+              "valueFrom": {
+                "path": "/tmp/container-io-report.json"
+              }
+            },
+            {
+              "name": "write-bytes-per-second",
+              "valueFrom": {
+                "path": "/tmp/io-write-speed.txt"
+              }
+            },
+            {
+              "name": "read-bytes-per-second",
+              "valueFrom": {
+                "path": "/tmp/io-read-speed.txt"
+              }
+            },
+            {
+              "name": "status",
+              "valueFrom": {
+                "path": "/tmp/io-status.txt"
+              }
+            }
+          ],
+          "artifacts": [
+            {
+              "name": "container-io-report",
+              "path": "/tmp/container-io-report.json",
+              "archive": {
+                "none": {}
+              }
+            }
+          ]
+        },
+        "metadata": {},
+        "script": {
+          "image": "harbor-srep01.ttttt.com/aistudio/ubuntu2404-uv-py39-py314-wf-py313:0.0.6",
+          "command": [
+            "/usr/local/bin/uv",
+            "run",
+            "python"
+          ],
+          "source": "import json\nimport os\nimport time\nfrom datetime import datetime, timezone\n\ntest_bytes = int(r'''{{inputs.parameters.test-bytes}}''')\nmin_speed = float(r'''{{inputs.parameters.min-bytes-per-second}}''')\nif test_bytes <= 0:\n    raise ValueError('test-bytes must be greater than zero')\nif min_speed < 0:\n    raise ValueError('min-bytes-per-second cannot be negative')\n\npath = '/tmp/bottleneck-io-test.bin'\nchunk = bytes(1024 * 1024)\nremaining = test_bytes\nwrite_started = time.perf_counter()\nwith open(path, 'wb', buffering=0) as file:\n    while remaining > 0:\n        size = min(len(chunk), remaining)\n        file.write(chunk[:size])\n        remaining -= size\n    os.fsync(file.fileno())\nwrite_seconds = time.perf_counter() - write_started\n\nread_bytes = 0\nread_started = time.perf_counter()\nwith open(path, 'rb', buffering=0) as file:\n    while True:\n        data = file.read(1024 * 1024)\n        if not data:\n            break\n        read_bytes += len(data)\nread_seconds = time.perf_counter() - read_started\nos.remove(path)\n\nwrite_speed = test_bytes / max(write_seconds, 0.001)\nread_speed = read_bytes / max(read_seconds, 0.001)\nstatus = 'SLOW' if min(write_speed, read_speed) < min_speed else 'OK'\n\nreport = {\n    'timestamp': datetime.now(timezone.utc).isoformat(),\n    'path': '/tmp',\n    'testBytes': test_bytes,\n    'writeSeconds': round(write_seconds, 6),\n    'readSeconds': round(read_seconds, 6),\n    'writeBytesPerSecond': round(write_speed, 2),\n    'readBytesPerSecond': round(read_speed, 2),\n    'minBytesPerSecond': min_speed,\n    'status': status\n}\n\nopen('/tmp/container-io-report.json', 'w', encoding='utf-8').write(\n    json.dumps(report, ensure_ascii=False, separators=(',', ':'))\n)\nopen('/tmp/io-write-speed.txt', 'w', encoding='utf-8').write(str(report['writeBytesPerSecond']))\nopen('/tmp/io-read-speed.txt', 'w', encoding='utf-8').write(str(report['readBytesPerSecond']))\nopen('/tmp/io-status.txt', 'w', encoding='utf-8').write(status)\nprint(json.dumps(report, ensure_ascii=False))\n"
+        }
+      },
+      {
+        "name": "summarize-bottlenecks",
+        "inputs": {
+          "parameters": [
+            {
+              "name": "nexus-status"
+            },
+            {
+              "name": "nexus-download-speed"
+            },
+            {
+              "name": "bitbucket-status"
+            },
+            {
+              "name": "bitbucket-total-seconds"
+            },
+            {
+              "name": "buildkit-status"
+            },
+            {
+              "name": "buildkit-total-seconds"
+            },
+            {
+              "name": "registry-status"
+            },
+            {
+              "name": "registry-total-seconds"
+            },
+            {
+              "name": "container-io-status"
+            },
+            {
+              "name": "container-write-speed"
+            },
+            {
+              "name": "container-read-speed"
+            }
+          ]
+        },
+        "outputs": {
+          "parameters": [
+            {
+              "name": "report-json",
+              "valueFrom": {
+                "path": "/tmp/bottleneck-report.json"
+              }
+            },
+            {
+              "name": "bottleneck-status",
+              "valueFrom": {
+                "path": "/tmp/bottleneck-status.txt"
+              }
+            },
+            {
+              "name": "slow-components",
+              "valueFrom": {
+                "path": "/tmp/slow-components.txt"
+              }
+            }
+          ],
+          "artifacts": [
+            {
+              "name": "bottleneck-report",
+              "path": "/tmp/bottleneck-report.json",
+              "archive": {
+                "none": {}
+              }
+            }
+          ]
+        },
+        "metadata": {},
+        "script": {
+          "image": "harbor-srep01.ttttt.com/aistudio/ubuntu2404-uv-py39-py314-wf-py313:0.0.6",
+          "command": [
+            "/usr/local/bin/uv",
+            "run",
+            "python"
+          ],
+          "source": "import json\nfrom datetime import datetime, timezone\n\ncomponents = {\n    'nexus-download': {\n        'status': r'''{{inputs.parameters.nexus-status}}''',\n        'downloadSpeedBytesPerSecond': float(r'''{{inputs.parameters.nexus-download-speed}}''')\n    },\n    'bitbucket-network': {\n        'status': r'''{{inputs.parameters.bitbucket-status}}''',\n        'totalSeconds': float(r'''{{inputs.parameters.bitbucket-total-seconds}}''')\n    },\n    'buildkit-network': {\n        'status': r'''{{inputs.parameters.buildkit-status}}''',\n        'totalSeconds': float(r'''{{inputs.parameters.buildkit-total-seconds}}''')\n    },\n    'harbor-registry-network': {\n        'status': r'''{{inputs.parameters.registry-status}}''',\n        'totalSeconds': float(r'''{{inputs.parameters.registry-total-seconds}}''')\n    },\n    'container-io': {\n        'status': r'''{{inputs.parameters.container-io-status}}''',\n        'writeBytesPerSecond': float(r'''{{inputs.parameters.container-write-speed}}'''),\n        'readBytesPerSecond': float(r'''{{inputs.parameters.container-read-speed}}''')\n    }\n}\n\nslow_components = [\n    name for name, metrics in components.items()\n    if metrics['status'] == 'SLOW'\n]\nbottleneck_status = 'SLOW' if slow_components else 'OK'\nreport = {\n    'timestamp': datetime.now(timezone.utc).isoformat(),\n    'bottleneckStatus': bottleneck_status,\n    'slowComponents': slow_components,\n    'components': components\n}\n\nopen('/tmp/bottleneck-report.json', 'w', encoding='utf-8').write(\n    json.dumps(report, ensure_ascii=False, separators=(',', ':'))\n)\nopen('/tmp/bottleneck-status.txt', 'w', encoding='utf-8').write(bottleneck_status)\nopen('/tmp/slow-components.txt', 'w', encoding='utf-8').write(','.join(slow_components))\nprint(json.dumps(report, ensure_ascii=False))\n"
         }
       },
       {
@@ -361,6 +868,21 @@
             },
             {
               "name": "image-tag"
+            },
+            {
+              "name": "buildkit-address"
+            },
+            {
+              "name": "nexus-pypi-url"
+            },
+            {
+              "name": "runtime-image"
+            }
+          ],
+          "artifacts": [
+            {
+              "name": "dockerfile",
+              "path": "/source/Dockerfile"
             }
           ]
         },
@@ -387,15 +909,12 @@
           ]
         },
         "metadata": {},
-        "container": {
-          "image": "CHANGE_ME",
+        "script": {
+          "image": "harbor.CHANGE_ME.internal/platform/git-python-buildctl:CHANGE_ME",
           "command": [
-            "sh",
-            "-c"
+            "sh"
           ],
-          "args": [
-            "echo 'CHANGE_ME: 실제 Git Clone, Dockerfile 변경 및 BuildKit 빌드 명령을 설정하세요.' >&2; exit 1"
-          ],
+          "source": "set -eu\n\nUSER_REPO='{{inputs.parameters.bitbucket-address-user-code}}'\nTEMPLATE_REPO='{{inputs.parameters.bitbucket-address-docker-template}}'\nBUILDKIT_ADDRESS='{{inputs.parameters.buildkit-address}}'\nNEXUS_PYPI_URL='{{inputs.parameters.nexus-pypi-url}}'\nRUNTIME_IMAGE='{{inputs.parameters.runtime-image}}'\nIMAGE_REFERENCE='{{inputs.parameters.registry-address}}/{{inputs.parameters.registry-project}}/{{inputs.parameters.image-name}}:{{inputs.parameters.image-tag}}'\nCACHE_REFERENCE='{{inputs.parameters.registry-address}}/{{inputs.parameters.registry-project}}/{{inputs.parameters.image-name}}:buildcache'\n\nrm -rf /workspace/user-code /workspace/docker-template /source/app /source/wheelhouse\nmkdir -p /workspace /source/app /source/wheelhouse\n\n# Bitbucket 인증은 실행 Pod에 주입된 SSH key/known_hosts 또는 credential helper를 사용합니다.\ngit clone --depth 1 -- \"$USER_REPO\" /workspace/user-code\ngit clone --depth 1 -- \"$TEMPLATE_REPO\" /workspace/docker-template\n\n# Dockerfile은 DAG에서 생성된 artifact를 사용하고, 애플리케이션 소스만 마지막 계층에 배치합니다.\ncp -R /workspace/user-code/. /source/app/\nrm -rf /source/app/.git\n\nif [ -f /workspace/user-code/requirements.lock ]; then\n  cp /workspace/user-code/requirements.lock /source/requirements.lock\nelif [ -f /workspace/user-code/requirements.txt ]; then\n  cp /workspace/user-code/requirements.txt /source/requirements.lock\nelif [ -f /workspace/docker-template/requirements.lock ]; then\n  cp /workspace/docker-template/requirements.lock /source/requirements.lock\nelse\n  echo 'requirements.lock 또는 requirements.txt가 없습니다.' >&2\n  exit 1\nfi\n\n# Nexus는 익명 다운로드가 가능하므로 인증정보 없이 wheelhouse를 구성합니다.\npython -m pip download \\\n  --index-url \"$NEXUS_PYPI_URL\" \\\n  --only-binary=:all: \\\n  --prefer-binary \\\n  --disable-pip-version-check \\\n  --timeout 30 \\\n  --retries 3 \\\n  --requirement /source/requirements.lock \\\n  --dest /source/wheelhouse\n\n# 기존 산출물 호환용 pyproject 정리 스크립트도 JSON 내부에서 생성합니다.\nprintf '%s\\n' \\\n  'from pathlib import Path' \\\n  '' \\\n  'def normalize_pyproject(path=\"pyproject.toml\"):' \\\n  '    target = Path(path)' \\\n  '    if not target.exists():' \\\n  '        return False' \\\n  '    text = target.read_text(encoding=\"utf-8\")' \\\n  '    target.write_text(text.replace(\"\\\\r\\\\n\", \"\\\\n\"), encoding=\"utf-8\")' \\\n  '    return True' \\\n  '' \\\n  'if __name__ == \"__main__\":' \\\n  '    normalize_pyproject()' \\\n  > /source/project-toml-change.py\n\n# BuildKit registry cache를 가져오고 갱신하여 의존성 레이어 재사용률을 높입니다.\nbuildctl --addr \"$BUILDKIT_ADDRESS\" build \\\n  --frontend dockerfile.v0 \\\n  --local context=/source \\\n  --local dockerfile=/source \\\n  --opt filename=Dockerfile \\\n  --opt target=release \\\n  --opt \"build-arg:RUNTIME_IMAGE=$RUNTIME_IMAGE\" \\\n  --import-cache \"type=registry,ref=$CACHE_REFERENCE\" \\\n  --export-cache \"type=registry,ref=$CACHE_REFERENCE,mode=max\" \\\n  --output \"type=image,name=$IMAGE_REFERENCE,push=true\" \\\n  --metadata-file /tmp/build-metadata.json\n\npython - <<'PY'\nimport json\nimport re\n\nwith open('/tmp/build-metadata.json', encoding='utf-8') as file:\n    metadata = json.load(file)\ndigest = (\n    metadata.get('containerimage.digest')\n    or metadata.get('containerimage.descriptor', {}).get('digest')\n    or ''\n)\nif not re.fullmatch(r'sha256:[0-9a-fA-F]{64}', digest):\n    raise SystemExit('BuildKit metadata에 유효한 image digest가 없습니다.')\nwith open('/tmp/digest.txt', 'w', encoding='utf-8') as file:\n    file.write(digest.lower())\nPY\n\nprintf 'built and pushed %s@%s\\n' \"$IMAGE_REFERENCE\" \"$(cat /tmp/digest.txt)\"\n",
           "resources": {}
         },
         "initContainers": [],
@@ -431,6 +950,57 @@
         }
       },
       {
+        "name": "analyze-dag-bottleneck",
+        "inputs": {
+          "parameters": [
+            {
+              "name": "slow-threshold-seconds"
+            }
+          ]
+        },
+        "outputs": {
+          "parameters": [
+            {
+              "name": "report-json",
+              "valueFrom": {
+                "path": "/tmp/dag-bottleneck-report.json"
+              }
+            },
+            {
+              "name": "status",
+              "valueFrom": {
+                "path": "/tmp/dag-bottleneck-status.txt"
+              }
+            },
+            {
+              "name": "slow-tasks",
+              "valueFrom": {
+                "path": "/tmp/dag-slow-tasks.txt"
+              }
+            }
+          ],
+          "artifacts": [
+            {
+              "name": "dag-bottleneck-report",
+              "path": "/tmp/dag-bottleneck-report.json",
+              "archive": {
+                "none": {}
+              }
+            }
+          ]
+        },
+        "metadata": {},
+        "script": {
+          "image": "harbor-srep01.ttttt.com/aistudio/ubuntu2404-uv-py39-py314-wf-py313:0.0.6",
+          "command": [
+            "/usr/local/bin/uv",
+            "run",
+            "python"
+          ],
+          "source": "import json\nimport os\nimport ssl\nimport urllib.error\nimport urllib.request\nfrom datetime import datetime, timezone\n\nworkflow_name = r'''{{workflow.name}}'''\nnamespace = r'''{{workflow.namespace}}'''\nslow_threshold = float(r'''{{inputs.parameters.slow-threshold-seconds}}''')\nif slow_threshold <= 0:\n    raise ValueError('slow-threshold-seconds must be greater than zero')\n\ndef parse_time(value):\n    if not value:\n        return None\n    return datetime.fromisoformat(value.replace('Z', '+00:00'))\n\ndef write_result(report, status, slow_tasks):\n    with open('/tmp/dag-bottleneck-report.json', 'w', encoding='utf-8') as file:\n        json.dump(report, file, ensure_ascii=False, separators=(',', ':'))\n    with open('/tmp/dag-bottleneck-status.txt', 'w', encoding='utf-8') as file:\n        file.write(status)\n    with open('/tmp/dag-slow-tasks.txt', 'w', encoding='utf-8') as file:\n        file.write(','.join(slow_tasks))\n    print(json.dumps(report, ensure_ascii=False))\n\nhost = os.environ.get('KUBERNETES_SERVICE_HOST', '')\nport = os.environ.get('KUBERNETES_SERVICE_PORT_HTTPS', '443')\ntoken_path = '/var/run/secrets/kubernetes.io/serviceaccount/token'\nca_path = '/var/run/secrets/kubernetes.io/serviceaccount/ca.crt'\nurl = f'https://{host}:{port}/apis/argoproj.io/v1alpha1/namespaces/{namespace}/workflows/{workflow_name}'\n\ntry:\n    if not host or not os.path.exists(token_path):\n        raise RuntimeError('in-cluster Kubernetes API configuration is unavailable')\n    token = open(token_path, encoding='utf-8').read().strip()\n    request = urllib.request.Request(url, headers={'Authorization': f'Bearer {token}'})\n    context = ssl.create_default_context(cafile=ca_path)\n    with urllib.request.urlopen(request, context=context, timeout=10) as response:\n        workflow = json.load(response)\nexcept (OSError, RuntimeError, urllib.error.URLError, json.JSONDecodeError) as error:\n    report = {\n        'timestamp': datetime.now(timezone.utc).isoformat(),\n        'workflowName': workflow_name,\n        'namespace': namespace,\n        'dagStatus': 'UNKNOWN',\n        'reason': 'WORKFLOW_STATUS_READ_FAILED',\n        'message': str(error),\n        'rbacRequired': 'get workflows.argoproj.io in the workflow namespace'\n    }\n    write_result(report, 'UNKNOWN', [])\n    raise SystemExit(0)\n\nnodes = workflow.get('status', {}).get('nodes', {})\ntasks = []\nfor node_id, node in nodes.items():\n    if node.get('type') not in {'Pod', 'Steps'}:\n        continue\n    name = node.get('displayName') or node.get('name') or node_id\n    if name in {'analyze-dag-bottleneck', 'send-http-request'}:\n        continue\n    started = parse_time(node.get('startedAt'))\n    finished = parse_time(node.get('finishedAt'))\n    duration = (finished - started).total_seconds() if started and finished else None\n    tasks.append({\n        'name': name,\n        'phase': node.get('phase', 'Unknown'),\n        'durationSeconds': round(duration, 3) if duration is not None else None,\n        'message': node.get('message', '')\n    })\n\ncompleted = [task for task in tasks if task['durationSeconds'] is not None]\ncompleted.sort(key=lambda task: task['durationSeconds'], reverse=True)\nslow_tasks = [task['name'] for task in completed if task['durationSeconds'] > slow_threshold]\nfailed_tasks = [task['name'] for task in tasks if task['phase'] in {'Failed', 'Error'}]\nstatus = 'SLOW' if slow_tasks or failed_tasks else 'OK'\nreport = {\n    'timestamp': datetime.now(timezone.utc).isoformat(),\n    'workflowName': workflow_name,\n    'namespace': namespace,\n    'dagStatus': status,\n    'slowThresholdSeconds': slow_threshold,\n    'slowTasks': slow_tasks,\n    'failedTasks': failed_tasks,\n    'criticalTask': completed[0] if completed else None,\n    'taskCount': len(tasks),\n    'completedTaskCount': len(completed),\n    'tasksByDuration': completed\n}\nwrite_result(report, status, slow_tasks)\n"
+        }
+      },
+      {
         "name": "notify-server",
         "inputs": {
           "parameters": [
@@ -442,18 +1012,20 @@
             },
             {
               "name": "image-reference"
+            },
+            {
+              "name": "dag-bottleneck-report"
             }
           ]
         },
-        "container": {
-          "image": "CHANGE_ME",
+        "script": {
+          "image": "harbor-srep01.ttttt.com/aistudio/ubuntu2404-uv-py39-py314-wf-py313:0.0.6",
           "command": [
-            "sh",
-            "-c"
+            "/usr/local/bin/uv",
+            "run",
+            "python"
           ],
-          "args": [
-            "echo 'CHANGE_ME: 내부 알림 서버 호출 명령을 설정하세요.' >&2; exit 1"
-          ]
+          "source": "import json\nimport urllib.request\n\nurl = r'''{{inputs.parameters.notification-server-url}}'''.strip()\npayload = {\n    'workflowName': r'''{{workflow.name}}''',\n    'namespace': r'''{{workflow.namespace}}''',\n    'imageDigest': r'''{{inputs.parameters.image-digest}}''',\n    'imageReference': r'''{{inputs.parameters.image-reference}}''',\n    'dagBottleneck': json.loads(r'''{{inputs.parameters.dag-bottleneck-report}}''')\n}\nprint(json.dumps(payload, ensure_ascii=False))\nif not url or url == 'CHANGE_ME':\n    print('notification-server-url is empty or CHANGE_ME; notification skipped')\n    raise SystemExit(0)\nbody = json.dumps(payload, ensure_ascii=False).encode('utf-8')\nrequest = urllib.request.Request(url, data=body, headers={'Content-Type': 'application/json'}, method='POST')\nwith urllib.request.urlopen(request, timeout=15) as response:\n    if response.status < 200 or response.status >= 300:\n        raise RuntimeError(f'notification failed: HTTP {response.status}')\n    print(f'notification sent: HTTP {response.status}')\n"
         }
       }
     ],
@@ -473,6 +1045,30 @@
           "value": "CHANGE_ME"
         },
         {
+          "name": "buildkit-address",
+          "value": "CHANGE_ME"
+        },
+        {
+          "name": "runtime-image",
+          "value": "CHANGE_ME"
+        },
+        {
+          "name": "dag-task-slow-threshold-seconds",
+          "value": "60.0"
+        },
+        {
+          "name": "bottleneck-network-slow-threshold-seconds",
+          "value": "2.0"
+        },
+        {
+          "name": "bottleneck-io-test-bytes",
+          "value": "33554432"
+        },
+        {
+          "name": "bottleneck-io-min-bytes-per-second",
+          "value": "52428800"
+        },
+        {
           "name": "registry-project",
           "value": "CHANGE_ME"
         },
@@ -485,12 +1081,24 @@
           "value": "CHANGE_ME"
         },
         {
-          "name": "zeus-pypi-url",
+          "name": "nexus-pypi-url",
           "value": "CHANGE_ME"
         },
         {
-          "name": "zeus-slow-threshold-seconds",
+          "name": "nexus-speed-test-url",
+          "value": ""
+        },
+        {
+          "name": "nexus-slow-threshold-seconds",
           "value": "5.0"
+        },
+        {
+          "name": "nexus-min-download-bytes-per-second",
+          "value": "1048576"
+        },
+        {
+          "name": "nexus-speed-sample-bytes",
+          "value": "10485760"
         },
         {
           "name": "notification-server-url",
