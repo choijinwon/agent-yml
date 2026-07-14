@@ -15,7 +15,7 @@ get-repository-name-from-git ─→ clone-source ─→ validate-lock
                                                │
 validate-runtime-image                         │
                                                ├─→ download-wheels ─┬→ verify-wheelhouse ─┐
-report-zeus-connectivity ──────────────────────┘                    └→ report-zeus-after-download
+report-nexus-connectivity ──────────────────────┘                    └→ report-nexus-after-download
                                                                                               │
 validate-runtime-image ───────────────────────────────────────────────────────────────────────┤
                                                                                               ↓
@@ -23,7 +23,7 @@ prepare-build-context → build-test-target → build-release-image → parse-im
     → generate-build-report → notify-build-result
 ```
 
-`get-repository-name-from-git`, `validate-runtime-image`, `report-zeus-connectivity`는 동시에 시작한다. `verify-wheelhouse`와 `report-zeus-after-download`도 Wheel 다운로드 직후 병렬로 실행한다. Zeus Wheel 다운로드 Task는 `zeus-concurrency-limit/wheel-downloads` 세마포어를 사용한다.
+`get-repository-name-from-git`, `validate-runtime-image`, `report-nexus-connectivity`는 동시에 시작한다. `verify-wheelhouse`와 `report-nexus-after-download`도 Wheel 다운로드 직후 병렬로 실행한다. Nexus Wheel 다운로드 Task는 `nexus-concurrency-limit/wheel-downloads` 세마포어를 사용한다.
 
 ## 11. Build Report JSON 예시
 
@@ -43,10 +43,10 @@ prepare-build-context → build-test-target → build-release-image → parse-im
   "wheelTotalBytes": 104857600,
   "wheelDownloadSeconds": 38,
   "averageDownloadBytesPerSecond": 2759410,
-  "zeusBeforeDownloadTotalSeconds": 0.421,
-  "zeusAfterDownloadTotalSeconds": 1.812,
+  "nexusBeforeDownloadTotalSeconds": 0.421,
+  "nexusAfterDownloadTotalSeconds": 1.812,
   "buildSeconds": 74,
-  "packageRepository": "zeus",
+  "packageRepository": "nexus",
   "wheelOnly": true,
   "status": "SUCCEEDED",
   "timestamp": "2026-07-13T09:00:00Z"
@@ -57,13 +57,13 @@ prepare-build-context → build-test-target → build-release-image → parse-im
 
 | 위치 | 변경 값 |
 |---|---|
-| Workflow Parameter | Bitbucket URL, Runtime Image와 실제 SHA-256, Zeus URL, Harbor 주소/프로젝트, 이미지 Tag, Cache 주소, BuildKit 주소, 알림 URL |
+| Workflow Parameter | Bitbucket URL, Runtime Image와 실제 SHA-256, Nexus URL, Harbor 주소/프로젝트, 이미지 Tag, Cache 주소, BuildKit 주소, 알림 URL |
 | Workflow Script Image | `python-tools`, `git-tools`, `curl-jq`, `python-build-tools`, `buildkit-client-tools`의 내부 Harbor 주소와 실제 SHA-256 |
 | PVC | `CHANGE_ME-rwx-storage`, 용량, 필요 시 Access Mode |
 | `registry-auth` | 실제 Harbor Host 및 자격 증명 |
 | `bitbucket-ssh` | Private Key와 검증된 `known_hosts` Host Key |
-| `zeus-pypi-auth` | Zeus 전용 최소 권한 계정 |
-| ConfigMap | Zeus가 허용하는 동시 Wheel 다운로드 수 |
+| Nexus 다운로드 인증 | 익명 다운로드 사용, 별도 Secret 불필요 |
+| ConfigMap | Nexus가 허용하는 동시 Wheel 다운로드 수 |
 | Build Tools Dockerfile | 폐쇄망 내부 Python Base Image와 실제 SHA-256 |
 | Dockerfile Template | 애플리케이션 실행 모듈/명령과 비-root UID가 실제 Runtime Image에 존재하는지 확인 |
 
@@ -97,7 +97,7 @@ python3 -m py_compile build-tools/scripts/*.py
 - `ReadWriteMany` StorageClass가 클러스터에 실제로 있어야 한다. NFS 계열 Storage에서는 소유권/성능/파일 잠금 정책도 확인한다.
 - Secret 예시는 배포 구조를 보여주기 위한 자리표시자다. 실제 값은 Git에 저장하지 말고 External Secrets/Sealed Secrets/Vault 같은 운영 Secret 관리 경로로 주입한다.
 - Bitbucket `known_hosts`는 `ssh-keyscan` 결과를 무검증으로 사용하지 말고 관리자가 별도 채널로 확인한 Host Key를 고정한다.
-- NetworkPolicy로 Bitbucket, Zeus, Harbor, BuildKit, 알림 서버와 DNS 이외의 Egress를 차단해야 “외부 PyPI 접근 금지”를 인프라 계층에서도 강제할 수 있다.
+- NetworkPolicy로 Bitbucket, Nexus, Harbor, BuildKit, 알림 서버와 DNS 이외의 Egress를 차단해야 “외부 PyPI 접근 금지”를 인프라 계층에서도 강제할 수 있다.
 - `requirements.lock`은 플랫폼/CPU/Python ABI에 맞는 Wheel만 포함해야 한다. `requirements.txt` fallback은 마이그레이션 경고를 내지만 운영에서는 정책 Admission으로 금지하는 편이 안전하다.
 - Test Target은 `tests/`가 존재하면 `pytest`를 실행한다. `pytest`가 Lock에 포함되지 않는 조직은 전용 Test Lock 또는 테스트 실행 명령을 Build Tools Template에 반영해야 한다.
 - 현재 로컬 환경에는 연결된 Kubernetes API와 Argo CRD Schema가 없어 서버 측 Dry Run은 수행하지 못했다. 실제 배포 전 대상 클러스터에서 `kubectl apply --server-side --dry-run=server`와 Argo 버전 호환성 검증이 필요하다.
