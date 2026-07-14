@@ -49,6 +49,36 @@
               "valueFrom": {
                 "parameter": "{{tasks.git-clone-change-dockerfile-and-build-docker.outputs.parameters.dockerfile-content}}"
               }
+            },
+            {
+              "name": "zeus-speed-report",
+              "valueFrom": {
+                "parameter": "{{tasks.check-zeus-speed.outputs.parameters.report-json}}"
+              }
+            },
+            {
+              "name": "zeus-total-seconds",
+              "valueFrom": {
+                "parameter": "{{tasks.check-zeus-speed.outputs.parameters.total-seconds}}"
+              }
+            },
+            {
+              "name": "zeus-download-bytes",
+              "valueFrom": {
+                "parameter": "{{tasks.check-zeus-speed.outputs.parameters.download-bytes}}"
+              }
+            },
+            {
+              "name": "zeus-download-speed-bytes-per-second",
+              "valueFrom": {
+                "parameter": "{{tasks.check-zeus-speed.outputs.parameters.download-speed-bytes-per-second}}"
+              }
+            },
+            {
+              "name": "zeus-speed-status",
+              "valueFrom": {
+                "parameter": "{{tasks.check-zeus-speed.outputs.parameters.speed-status}}"
+              }
             }
           ],
           "artifacts": [
@@ -78,10 +108,27 @@
               }
             },
             {
+              "name": "check-zeus-speed",
+              "template": "check-zeus-speed",
+              "arguments": {
+                "parameters": [
+                  {
+                    "name": "zeus-pypi-url",
+                    "value": "{{workflow.parameters.zeus-pypi-url}}"
+                  },
+                  {
+                    "name": "slow-threshold-seconds",
+                    "value": "{{workflow.parameters.zeus-slow-threshold-seconds}}"
+                  }
+                ]
+              }
+            },
+            {
               "name": "git-clone-change-dockerfile-and-build-docker",
               "template": "git-clone-change-dockerfile-and-build-docker",
               "dependencies": [
-                "get-repository-name-from-git"
+                "get-repository-name-from-git",
+                "check-zeus-speed"
               ],
               "arguments": {
                 "parameters": [
@@ -199,6 +246,92 @@
             "python"
           ],
           "source": "import re\n\ndef parse_repository_name(url):\n    normalized = url.rstrip('/').removesuffix('.git')\n    name = normalized.rsplit('/', 1)[-1]\n    if not re.fullmatch(r'[A-Za-z0-9._-]+', name):\n        raise ValueError(f'invalid repository name: {name}')\n    return name\n\nuser_code = parse_repository_name(r'''{{inputs.parameters.bitbucket-address-user-code}}''')\ndocker_template = parse_repository_name(r'''{{inputs.parameters.bitbucket-address-docker-template}}''')\n\nwith open('/tmp/repo-name-user-code.txt', 'w', encoding='utf-8') as file:\n    file.write(user_code)\n\nwith open('/tmp/repo-name-docker-template.txt', 'w', encoding='utf-8') as file:\n    file.write(docker_template)\n"
+        }
+      },
+      {
+        "name": "check-zeus-speed",
+        "inputs": {
+          "parameters": [
+            {
+              "name": "zeus-pypi-url"
+            },
+            {
+              "name": "slow-threshold-seconds"
+            }
+          ]
+        },
+        "outputs": {
+          "parameters": [
+            {
+              "name": "report-json",
+              "valueFrom": {
+                "path": "/tmp/zeus-speed-report.json"
+              }
+            },
+            {
+              "name": "total-seconds",
+              "valueFrom": {
+                "path": "/tmp/zeus-total-seconds.txt"
+              }
+            },
+            {
+              "name": "download-bytes",
+              "valueFrom": {
+                "path": "/tmp/zeus-download-bytes.txt"
+              }
+            },
+            {
+              "name": "download-speed-bytes-per-second",
+              "valueFrom": {
+                "path": "/tmp/zeus-download-speed.txt"
+              }
+            },
+            {
+              "name": "speed-status",
+              "valueFrom": {
+                "path": "/tmp/zeus-speed-status.txt"
+              }
+            }
+          ],
+          "artifacts": [
+            {
+              "name": "zeus-speed-report",
+              "path": "/tmp/zeus-speed-report.json",
+              "archive": {
+                "none": {}
+              }
+            }
+          ]
+        },
+        "metadata": {},
+        "script": {
+          "image": "harbor-srep01.ttttt.com/aistudio/ubuntu2404-uv-py39-py314-wf-py313:0.0.6",
+          "command": [
+            "/usr/local/bin/uv",
+            "run",
+            "python"
+          ],
+          "env": [
+            {
+              "name": "ZEUS_USERNAME",
+              "valueFrom": {
+                "secretKeyRef": {
+                  "name": "zeus-pypi-auth",
+                  "key": "username"
+                }
+              }
+            },
+            {
+              "name": "ZEUS_PASSWORD",
+              "valueFrom": {
+                "secretKeyRef": {
+                  "name": "zeus-pypi-auth",
+                  "key": "password"
+                }
+              }
+            }
+          ],
+          "source": "import base64\nimport json\nimport os\nimport time\nimport urllib.request\nfrom datetime import datetime, timezone\nfrom urllib.parse import urlsplit\n\nurl = r'''{{inputs.parameters.zeus-pypi-url}}'''.strip()\nthreshold = float(r'''{{inputs.parameters.slow-threshold-seconds}}''')\nif not url.startswith(('http://', 'https://')):\n    raise ValueError('zeus-pypi-url must start with http:// or https://')\nif threshold <= 0:\n    raise ValueError('slow-threshold-seconds must be greater than zero')\n\nusername = os.environ['ZEUS_USERNAME']\npassword = os.environ['ZEUS_PASSWORD']\ntoken = base64.b64encode(f'{username}:{password}'.encode()).decode()\nrequest = urllib.request.Request(\n    url,\n    headers={\n        'Authorization': f'Basic {token}',\n        'User-Agent': 'argo-zeus-speed-check/1.0'\n    }\n)\n\nstarted = time.perf_counter()\nwith urllib.request.urlopen(request, timeout=30) as response:\n    http_status = response.status\n    body = response.read()\ntotal_seconds = time.perf_counter() - started\ndownload_bytes = len(body)\ndownload_speed = download_bytes / max(total_seconds, 0.001)\nspeed_status = 'OK' if total_seconds <= threshold else 'SLOW'\n\nreport = {\n    'timestamp': datetime.now(timezone.utc).isoformat(),\n    'host': urlsplit(url).hostname,\n    'httpStatus': http_status,\n    'totalSeconds': round(total_seconds, 6),\n    'downloadBytes': download_bytes,\n    'downloadSpeedBytesPerSecond': round(download_speed, 2),\n    'slowThresholdSeconds': threshold,\n    'speedStatus': speed_status\n}\n\nwith open('/tmp/zeus-speed-report.json', 'w', encoding='utf-8') as file:\n    json.dump(report, file, ensure_ascii=False, separators=(',', ':'))\nwith open('/tmp/zeus-total-seconds.txt', 'w', encoding='utf-8') as file:\n    file.write(str(report['totalSeconds']))\nwith open('/tmp/zeus-download-bytes.txt', 'w', encoding='utf-8') as file:\n    file.write(str(download_bytes))\nwith open('/tmp/zeus-download-speed.txt', 'w', encoding='utf-8') as file:\n    file.write(str(report['downloadSpeedBytesPerSecond']))\nwith open('/tmp/zeus-speed-status.txt', 'w', encoding='utf-8') as file:\n    file.write(speed_status)\n\nprint(json.dumps(report, ensure_ascii=False))\n"
         }
       },
       {
@@ -350,6 +483,14 @@
         {
           "name": "image-tag",
           "value": "CHANGE_ME"
+        },
+        {
+          "name": "zeus-pypi-url",
+          "value": "CHANGE_ME"
+        },
+        {
+          "name": "zeus-slow-threshold-seconds",
+          "value": "5.0"
         },
         {
           "name": "notification-server-url",
