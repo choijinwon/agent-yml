@@ -48,8 +48,8 @@ secret_yaml = YAML.safe_load(File.read("secrets.yaml"), aliases: true)
 secret_json = JSON.parse(File.read("secrets.json"))
 assert(secret_yaml == secret_json, "Secret YAML and JSON differ")
 
-config_yaml = YAML.safe_load(File.read("zeus-concurrency-limit.yaml"), aliases: true)
-config_json = JSON.parse(File.read("zeus-concurrency-limit.json"))
+config_yaml = YAML.safe_load(File.read("nexus-concurrency-limit.yaml"), aliases: true)
+config_json = JSON.parse(File.read("nexus-concurrency-limit.json"))
 assert(config_yaml == config_json, "ConfigMap YAML and JSON differ")
 
 puts "OK: YAML/JSON parity, task/template inputs, volumes, shell safety, and image pinning verified"
