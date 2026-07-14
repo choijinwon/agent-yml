@@ -2,7 +2,7 @@
 
 PVC와 Registry Cache의 수명과 목적을 분리했다.
 
-- `workspace` PVC: 현재 Workflow의 `/workspace/source`, `/workspace/wheelhouse`, `/workspace/generated`, `/workspace/output`을 Pod 사이에서 공유한다. Workflow가 삭제되면 PVC도 Workflow 소유권에 따라 정리되는 전용 작업 공간이다.
+- `workspace` PVC: 현재 Workflow의 `/workspace/generated/context`, `/workspace/generated`, `/workspace/output`을 Pod 사이에서 공유한다. Source와 Wheelhouse를 처음부터 Build Context 하위에 생성해 중간 전체 복사를 제거한다.
 - Harbor Registry Cache: 단일 Release Build에서 Registry Cache를 Import하고 `--export-cache type=registry,ref=...,mode=min`으로 최종 이미지에 필요한 레이어만 갱신한다. Release Stage가 Test Stage의 성공 표식을 의존하므로 별도의 Test BuildKit 호출 없이 테스트가 강제된다.
 - Harbor Application Repository: `harbor.CHANGE_ME.internal/applications/<repository>:<tag>`에 `release` Target만 Push한다. 배포와 기록에는 BuildKit metadata에서 얻은 Digest를 함께 사용한다.
 
@@ -14,7 +14,7 @@ Cache Repository에는 애플리케이션 배포 보존 정책과 다른 정리 
 get-repository-name-from-git ─→ clone-source ─→ validate-lock
                                                │
 validate-runtime-image                         │
-                                               ├─→ download-wheels ─┬→ verify-wheelhouse ─┐
+                                               ├─→ download-wheels ─┬→ prepare-build-context ─┐
 report-nexus-connectivity ──────────────────────┘                    └→ report-nexus-after-download
                                                                                               │
 validate-runtime-image ───────────────────────────────────────────────────────────────────────┤
@@ -23,7 +23,7 @@ prepare-build-context → build-release-image(test 포함) → parse-image-diges
     → generate-build-report → notify-build-result
 ```
 
-`get-repository-name-from-git`, `validate-runtime-image`, `report-nexus-connectivity`는 동시에 시작한다. `verify-wheelhouse`와 `report-nexus-after-download`도 Wheel 다운로드 직후 병렬로 실행한다. Nexus Wheel 다운로드 Task는 `nexus-concurrency-limit/wheel-downloads` 세마포어를 사용한다.
+`get-repository-name-from-git`, `validate-runtime-image`, `report-nexus-connectivity`는 동시에 시작한다. Wheel 다운로드가 끝나면 Context 준비와 Nexus 사후 측정을 병렬 실행한다. Wheel 완전성은 Dockerfile `dependencies` Stage의 `pip install --no-index`가 검증하므로 별도 중복 설치 Task를 두지 않는다. Nexus Wheel 다운로드 Task는 `nexus-concurrency-limit/wheel-downloads` 세마포어를 사용한다.
 
 ## 11. Build Report JSON 예시
 
