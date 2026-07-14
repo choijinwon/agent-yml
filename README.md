@@ -1,6 +1,7 @@
 # Argo Python Image Build WorkflowTemplate
 
 폐쇄망 환경에서 Bitbucket Source와 Nexus PyPI Wheel을 사용해 원격 BuildKit으로 Python 이미지를 빌드하고 Harbor에 Push하는 Argo WorkflowTemplate이다.
+Nexus 다운로드는 병목이 아닌 것으로 확인되어 별도 속도 체크 Task는 제거했고, Dependency Image Cache와 BuildKit Layer Cache 중심으로 배포 시간을 줄인다.
 
 ## 주요 파일
 

@@ -13,6 +13,9 @@ PARAMETER_COMMENTS = {
   "image-tag" => "최종 이미지 Tag; Digest는 BuildKit Metadata에서 별도로 기록",
   "cache-registry-address" => "Workflow 간 BuildKit Layer를 재사용할 Harbor Cache 경로",
   "buildkit-address" => "원격 BuildKit daemon 주소",
+  "python-abi" => "Dependency Image Cache Key에 포함할 Python ABI(예: cp311)",
+  "target-platform" => "Dependency Image Cache Key에 포함할 OS-Architecture(예: linux-amd64)",
+  "force-rebuild-dependencies" => "true이면 기존 Dependency Image가 있어도 강제로 재생성",
   "notification-server-url" => "Build Report POST 대상; 빈 문자열이면 알림 생략"
 }.freeze
 
@@ -20,14 +23,14 @@ TASK_COMMENTS = {
   "get-repository-name-from-git" => "Git URL에서 안전한 Repository 이름 추출",
   "clone-source" => "SSH Secret을 사용해 Source를 Workspace PVC로 Shallow Clone",
   "validate-runtime-image" => "Runtime 이미지가 Digest 고정 형식인지 검증",
-  "report-nexus-connectivity" => "Wheel 다운로드 전 Nexus DNS/TCP/TLS/HTTP 성능 측정",
   "validate-lock" => "requirements.lock 우선 탐색 및 SHA-256 계산",
-  "download-wheels" => "Nexus에서 Wheel-only 정책으로 의존성 다운로드",
-  "report-nexus-after-download" => "Wheel 다운로드 직후 Nexus 연결 성능 재측정",
-  "prepare-build-context" => "Source·Wheel·Lock을 조합해 BuildKit Context 생성",
+  "check-dependency-image" => "Lock·Runtime·ABI·Platform Key로 Harbor Dependency Image 조회",
+  "download-wheels" => "Dependency Cache MISS일 때만 Nexus에서 Wheel 다운로드",
+  "prepare-build-context" => "Source·Wheel·Lock과 Dependency Image Stage를 조합해 BuildKit Context 생성",
+  "build-dependency-image" => "Cache MISS일 때만 Dependency Image 생성 후 Digest 고정",
   "build-release-image" => "단일 BuildKit 호출로 test를 실행한 뒤 release Target을 Harbor에 Push",
   "parse-image-digest" => "BuildKit 결과에서 sha256 Digest를 엄격하게 추출",
-  "generate-build-report" => "빌드·Wheel·Nexus 지표를 Build Report JSON으로 집계",
+  "generate-build-report" => "빌드·Wheel·Dependency Cache 지표를 Build Report JSON으로 집계",
   "notify-build-result" => "알림 URL이 있으면 Build Report를 재시도 포함 POST"
 }.freeze
 
@@ -49,7 +52,7 @@ KEY_COMMENTS = {
   '"volumes": [' => "외부 시스템 인증을 Pod에 제공하는 Secret Volume",
   '"templates": [' => "Main DAG와 실제 실행 Script Template 전체 목록",
   '"dag": {' => "Task의 의존 관계와 병렬 실행 구조",
-  '"tasks": [' => "12개 Workflow Task; depends 조건으로 실행 순서 제어",
+  '"tasks": [' => "12개 Workflow Task; Dependency Image Cache와 depends 조건으로 실행 순서 제어",
   '"synchronization": {' => "ConfigMap Semaphore를 사용해 Nexus 동시 다운로드 수 제한",
   '"inputs": {' => "Task가 arguments.parameters로 전달받는 입력",
   '"outputs": {' => "후속 Task가 참조할 Parameter 및 Artifact",

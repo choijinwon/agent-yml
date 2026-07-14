@@ -3,7 +3,9 @@
 PVC와 Registry Cache의 수명과 목적을 분리했다.
 
 - `workspace` PVC: 현재 Workflow의 `/workspace/generated/context`, `/workspace/generated`, `/workspace/output`을 Pod 사이에서 공유한다. Source와 Wheelhouse를 처음부터 Build Context 하위에 생성해 중간 전체 복사를 제거한다.
-- Harbor Registry Cache: 단일 Release Build에서 Registry Cache를 Import하고 `--export-cache type=registry,ref=...,mode=min`으로 최종 이미지에 필요한 레이어만 갱신한다. Release Stage가 Test Stage의 성공 표식을 의존하므로 별도의 Test BuildKit 호출 없이 테스트가 강제된다.
+- Harbor Dependency Image: `requirements.lock SHA-256 + Runtime Digest + Python ABI + Target Platform`을 Key로 `/python-deps:<key>`를 조회한다. HIT이면 Nexus 다운로드와 `pip install`을 생략하고 Harbor Digest로 고정해 재사용한다. MISS이면 Mutex 획득 후 다시 조회하고 한 번만 생성한다.
+- Nexus: 다운로드 시간이 짧은 것으로 확인되어 별도 속도 체크 Task는 제거했다. 병목 분석은 BuildKit 실행, Dependency Image 생성, Layer Cache 재사용 여부에 집중한다.
+- Harbor Registry Cache: 단일 Release Build에서 Registry Cache를 Import하고 `--export-cache type=registry,ref=...,mode=min`으로 애플리케이션 레이어만 갱신한다. Release Stage가 Test Stage의 성공 표식을 의존하므로 별도의 Test BuildKit 호출 없이 테스트가 강제된다.
 - Harbor Application Repository: `harbor.CHANGE_ME.internal/applications/<repository>:<tag>`에 `release` Target만 Push한다. 배포와 기록에는 BuildKit metadata에서 얻은 Digest를 함께 사용한다.
 
 Cache Repository에는 애플리케이션 배포 보존 정책과 다른 정리 정책을 적용해야 한다. 여러 빌드가 같은 `:buildcache` Tag를 동시에 갱신할 수 있으므로, 충돌이 문제라면 브랜치/플랫폼별 Cache Tag를 추가한다.
@@ -11,19 +13,20 @@ Cache Repository에는 애플리케이션 배포 보존 정책과 다른 정리 
 ## 10. 주요 Task 실행 흐름
 
 ```text
-get-repository-name-from-git ─→ clone-source ─→ validate-lock
-                                               │
-validate-runtime-image                         │
-                                               ├─→ download-wheels ─┬→ prepare-build-context ─┐
-report-nexus-connectivity ──────────────────────┘                    └→ report-nexus-after-download
+get-repository-name-from-git ─→ clone-source ─→ validate-lock ─┐
+validate-runtime-image ─────────────────────────────────────────┼→ check-dependency-image
+                                                                              ↓
+                        download-wheels(HIT이면 생략) → prepare-build-context
+                                                                              ↓
+                              build-dependency-image(HIT이면 재사용)
                                                                                               │
 validate-runtime-image ───────────────────────────────────────────────────────────────────────┤
                                                                                               ↓
-prepare-build-context → build-release-image(test 포함) → parse-image-digest
+→ build-release-image(test 포함) → parse-image-digest
     → generate-build-report → notify-build-result
 ```
 
-`get-repository-name-from-git`, `validate-runtime-image`, `report-nexus-connectivity`는 동시에 시작한다. Wheel 다운로드가 끝나면 Context 준비와 Nexus 사후 측정을 병렬 실행한다. Wheel 완전성은 Dockerfile `dependencies` Stage의 `pip install --no-index`가 검증하므로 별도 중복 설치 Task를 두지 않는다. Nexus Wheel 다운로드 Task는 `nexus-concurrency-limit/wheel-downloads` 세마포어를 사용한다.
+`get-repository-name-from-git`, `clone-source`, `validate-runtime-image`가 병렬로 시작된다. Nexus 다운로드는 이미 짧은 구간으로 확인했으므로 별도 진단 Task를 두지 않는다. Dependency Image HIT이면 Nexus 다운로드와 Dependency Build를 생략한다. MISS이면 Nexus에서 Wheel을 받고 Lock Hash 단위 Mutex 안에서 Harbor를 재조회한 뒤 Dependency Image를 생성한다. Harbor 조회의 404/manifest unknown만 MISS로 취급하며 인증·네트워크·5xx 오류는 실패 처리한다.
 
 ## 11. Build Report JSON 예시
 
@@ -43,8 +46,11 @@ prepare-build-context → build-release-image(test 포함) → parse-image-diges
   "wheelTotalBytes": 104857600,
   "wheelDownloadSeconds": 38,
   "averageDownloadBytesPerSecond": 2759410,
-  "nexusBeforeDownloadTotalSeconds": 0.421,
-  "nexusAfterDownloadTotalSeconds": 1.812,
+  "dependencyCacheStatus": "HIT",
+  "dependencyCacheKey": "<lock-hash>-<runtime-digest>-cp311-linux-amd64",
+  "dependencyImageReference": "harbor.internal/build-cache/python-deps@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "dependencyImageResult": "REUSED",
+  "dependencyBuildSeconds": 0,
   "buildSeconds": 74,
   "packageRepository": "nexus",
   "wheelOnly": true,
@@ -57,7 +63,7 @@ prepare-build-context → build-release-image(test 포함) → parse-image-diges
 
 | 위치 | 변경 값 |
 |---|---|
-| Workflow Parameter | Bitbucket URL, Runtime Image와 실제 SHA-256, Nexus URL, Harbor 주소/프로젝트, 이미지 Tag, Cache 주소, BuildKit 주소, 알림 URL |
+| Workflow Parameter | Bitbucket URL, Runtime Image와 실제 SHA-256, Nexus URL, Harbor 주소/프로젝트, 이미지 Tag, Cache 주소, BuildKit 주소, Python ABI, Target Platform, Dependency 강제 재생성 여부, 알림 URL |
 | Workflow Script Image | `python-tools`, `git-tools`, `curl-jq`, `python-build-tools`, `buildkit-client-tools`의 내부 Harbor 주소와 실제 SHA-256 |
 | PVC | `CHANGE_ME-rwx-storage`, 용량, 필요 시 Access Mode |
 | `registry-auth` | 실제 Harbor Host 및 자격 증명 |
@@ -94,6 +100,8 @@ python3 -m py_compile build-tools/scripts/*.py
 - Argo Controller가 Output Artifact를 저장하려면 Namespace/Controller에 Artifact Repository가 구성되어 있어야 한다. 파일은 PVC에도 남지만 Artifact 업로드 설정이 없으면 Artifact Output 단계가 실패할 수 있다.
 - `buildSeconds`는 Test Stage·Release Stage·Cache Export·Harbor Push를 포함한 단일 BuildKit 호출의 전체 시간이며 `push-seconds`는 호환성을 위해 `0`이다. 정확한 Push 시간 분리가 필요하면 Registry 이벤트/Telemetry를 결합해야 한다.
 - 원격 BuildKit이 TLS/mTLS를 요구하면 BuildKit 인증용 Secret Volume과 `buildctl --tlscacert/--tlscert/--tlskey`를 추가해야 한다. 현재 요구사항에 그 Secret이 정의되지 않아 주소 및 사내 CA 신뢰가 Client Image에 준비됐다는 전제다.
+- `buildkit-client-tools` 이미지에는 `buildctl`, `crane`, `jq`, `sha256sum`이 모두 포함되어야 한다. `crane`은 Harbor Dependency Image의 Digest 조회와 오류 분류에 사용한다.
+- Dependency Image Tag는 Cache 조회에만 사용하고 애플리케이션 Build에는 항상 `@sha256:` Digest가 포함된 Reference를 전달한다. 보안 갱신 시 `force-rebuild-dependencies=true`로 재생성한다.
 - `ReadWriteMany` StorageClass가 클러스터에 실제로 있어야 한다. NFS 계열 Storage에서는 소유권/성능/파일 잠금 정책도 확인한다.
 - Secret 예시는 배포 구조를 보여주기 위한 자리표시자다. 실제 값은 Git에 저장하지 말고 External Secrets/Sealed Secrets/Vault 같은 운영 Secret 관리 경로로 주입한다.
 - Bitbucket `known_hosts`는 `ssh-keyscan` 결과를 무검증으로 사용하지 말고 관리자가 별도 채널로 확인한 Host Key를 고정한다.

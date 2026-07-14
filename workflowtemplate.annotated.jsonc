@@ -62,6 +62,21 @@
           // Build Report POST 대상; 빈 문자열이면 알림 생략
           "name": "notification-server-url",
           "value": ""
+        },
+        {
+          // Dependency Image Cache Key에 포함할 Python ABI(예: cp311)
+          "name": "python-abi",
+          "value": "cp311"
+        },
+        {
+          // Dependency Image Cache Key에 포함할 OS-Architecture(예: linux-amd64)
+          "name": "target-platform",
+          "value": "linux-amd64"
+        },
+        {
+          // true이면 기존 Dependency Image가 있어도 강제로 재생성
+          "name": "force-rebuild-dependencies",
+          "value": "false"
         }
       ]
     },
@@ -112,7 +127,7 @@
         "name": "main",
         // Task의 의존 관계와 병렬 실행 구조
         "dag": {
-          // 12개 Workflow Task; depends 조건으로 실행 순서 제어
+          // 12개 Workflow Task; Dependency Image Cache와 depends 조건으로 실행 순서 제어
           "tasks": [
             {
               // Git URL에서 안전한 Repository 이름 추출
@@ -158,33 +173,50 @@
               }
             },
             {
-              // Wheel 다운로드 전 Nexus DNS/TCP/TLS/HTTP 성능 측정
-              "name": "report-nexus-connectivity",
-              "template": "report-nexus-connectivity",
-              // Workflow 또는 Task에 전달하는 Parameter 묶음
-              "arguments": {
-                "parameters": [
-                  {
-                    "name": "nexus-pypi-url",
-                    "value": "{{workflow.parameters.nexus-pypi-url}}"
-                  },
-                  {
-                    "name": "phase",
-                    "value": "before-download"
-                  }
-                ]
-              }
-            },
-            {
               // requirements.lock 우선 탐색 및 SHA-256 계산
               "name": "validate-lock",
               "depends": "clone-source.Succeeded",
               "template": "validate-lock"
             },
             {
-              // Nexus에서 Wheel-only 정책으로 의존성 다운로드
+              // Lock·Runtime·ABI·Platform Key로 Harbor Dependency Image 조회
+              "name": "check-dependency-image",
+              "depends": "validate-lock.Succeeded && validate-runtime-image.Succeeded",
+              "template": "check-dependency-image",
+              // Workflow 또는 Task에 전달하는 Parameter 묶음
+              "arguments": {
+                "parameters": [
+                  {
+                    "name": "cache-registry-address",
+                    "value": "{{workflow.parameters.cache-registry-address}}"
+                  },
+                  {
+                    "name": "lock-hash",
+                    "value": "{{tasks.validate-lock.outputs.parameters.lock-hash}}"
+                  },
+                  {
+                    "name": "runtime-image-digest",
+                    "value": "{{tasks.validate-runtime-image.outputs.parameters.parent-image-digest}}"
+                  },
+                  {
+                    "name": "python-abi",
+                    "value": "{{workflow.parameters.python-abi}}"
+                  },
+                  {
+                    "name": "target-platform",
+                    "value": "{{workflow.parameters.target-platform}}"
+                  },
+                  {
+                    "name": "force-rebuild",
+                    "value": "{{workflow.parameters.force-rebuild-dependencies}}"
+                  }
+                ]
+              }
+            },
+            {
+              // Dependency Cache MISS일 때만 Nexus에서 Wheel 다운로드
               "name": "download-wheels",
-              "depends": "validate-lock.Succeeded && report-nexus-connectivity.Succeeded",
+              "depends": "check-dependency-image.Succeeded",
               "template": "download-wheels",
               // Workflow 또는 Task에 전달하는 Parameter 묶음
               "arguments": {
@@ -196,31 +228,16 @@
                   {
                     "name": "lock-file-name",
                     "value": "{{tasks.validate-lock.outputs.parameters.lock-file-name}}"
-                  }
-                ]
-              }
-            },
-            {
-              // Wheel 다운로드 직후 Nexus 연결 성능 재측정
-              "name": "report-nexus-after-download",
-              "depends": "download-wheels.Succeeded",
-              "template": "report-nexus-connectivity",
-              // Workflow 또는 Task에 전달하는 Parameter 묶음
-              "arguments": {
-                "parameters": [
-                  {
-                    "name": "nexus-pypi-url",
-                    "value": "{{workflow.parameters.nexus-pypi-url}}"
                   },
                   {
-                    "name": "phase",
-                    "value": "after-download"
+                    "name": "dependency-cache-status",
+                    "value": "{{tasks.check-dependency-image.outputs.parameters.cache-status}}"
                   }
                 ]
               }
             },
             {
-              // Source·Wheel·Lock을 조합해 BuildKit Context 생성
+              // Source·Wheel·Lock과 Dependency Image Stage를 조합해 BuildKit Context 생성
               "name": "prepare-build-context",
               "depends": "validate-runtime-image.Succeeded && download-wheels.Succeeded",
               "template": "prepare-build-context",
@@ -254,6 +271,49 @@
                   {
                     "name": "cache-reference",
                     "value": "{{workflow.parameters.cache-registry-address}}/{{tasks.get-repository-name-from-git.outputs.parameters.repository-name}}:buildcache"
+                  },
+                  {
+                    "name": "dependency-cache-status",
+                    "value": "{{tasks.check-dependency-image.outputs.parameters.cache-status}}"
+                  }
+                ]
+              }
+            },
+            {
+              // Cache MISS일 때만 Dependency Image 생성 후 Digest 고정
+              "name": "build-dependency-image",
+              "depends": "prepare-build-context.Succeeded",
+              "template": "build-dependency-image",
+              // Workflow 또는 Task에 전달하는 Parameter 묶음
+              "arguments": {
+                "parameters": [
+                  {
+                    "name": "cache-status",
+                    "value": "{{tasks.check-dependency-image.outputs.parameters.cache-status}}"
+                  },
+                  {
+                    "name": "dependency-image-tag",
+                    "value": "{{tasks.check-dependency-image.outputs.parameters.dependency-image-tag}}"
+                  },
+                  {
+                    "name": "dependency-image-reference",
+                    "value": "{{tasks.check-dependency-image.outputs.parameters.dependency-image-reference}}"
+                  },
+                  {
+                    "name": "dependency-mutex-key",
+                    "value": "{{tasks.check-dependency-image.outputs.parameters.dependency-mutex-key}}"
+                  },
+                  {
+                    "name": "force-rebuild",
+                    "value": "{{workflow.parameters.force-rebuild-dependencies}}"
+                  },
+                  {
+                    "name": "buildkit-address",
+                    "value": "{{workflow.parameters.buildkit-address}}"
+                  },
+                  {
+                    "name": "runtime-image",
+                    "value": "{{tasks.validate-runtime-image.outputs.parameters.runtime-image}}"
                   }
                 ]
               }
@@ -261,7 +321,7 @@
             {
               // 단일 BuildKit 호출로 test를 실행한 뒤 release Target을 Harbor에 Push
               "name": "build-release-image",
-              "depends": "prepare-build-context.Succeeded",
+              "depends": "build-dependency-image.Succeeded",
               "template": "build-release-image",
               // Workflow 또는 Task에 전달하는 Parameter 묶음
               "arguments": {
@@ -281,6 +341,10 @@
                   {
                     "name": "cache-reference",
                     "value": "{{workflow.parameters.cache-registry-address}}/{{tasks.get-repository-name-from-git.outputs.parameters.repository-name}}:buildcache"
+                  },
+                  {
+                    "name": "dependency-image",
+                    "value": "{{tasks.build-dependency-image.outputs.parameters.dependency-image-reference}}"
                   }
                 ]
               }
@@ -301,9 +365,9 @@
               }
             },
             {
-              // 빌드·Wheel·Nexus 지표를 Build Report JSON으로 집계
+              // 빌드·Wheel·Dependency Cache 지표를 Build Report JSON으로 집계
               "name": "generate-build-report",
-              "depends": "parse-image-digest.Succeeded && report-nexus-after-download.Succeeded",
+              "depends": "parse-image-digest.Succeeded",
               "template": "generate-build-report",
               // Workflow 또는 Task에 전달하는 Parameter 묶음
               "arguments": {
@@ -353,16 +417,28 @@
                     "value": "{{tasks.download-wheels.outputs.parameters.average-download-bytes-per-second}}"
                   },
                   {
-                    "name": "nexus-before-download-total-seconds",
-                    "value": "{{tasks.report-nexus-connectivity.outputs.parameters.total-seconds}}"
-                  },
-                  {
-                    "name": "nexus-after-download-total-seconds",
-                    "value": "{{tasks.report-nexus-after-download.outputs.parameters.total-seconds}}"
-                  },
-                  {
                     "name": "build-seconds",
                     "value": "{{tasks.build-release-image.outputs.parameters.build-seconds}}"
+                  },
+                  {
+                    "name": "dependency-cache-status",
+                    "value": "{{tasks.check-dependency-image.outputs.parameters.cache-status}}"
+                  },
+                  {
+                    "name": "dependency-cache-key",
+                    "value": "{{tasks.check-dependency-image.outputs.parameters.dependency-cache-key}}"
+                  },
+                  {
+                    "name": "dependency-image-reference",
+                    "value": "{{tasks.build-dependency-image.outputs.parameters.dependency-image-reference}}"
+                  },
+                  {
+                    "name": "dependency-image-result",
+                    "value": "{{tasks.build-dependency-image.outputs.parameters.dependency-image-result}}"
+                  },
+                  {
+                    "name": "dependency-build-seconds",
+                    "value": "{{tasks.build-dependency-image.outputs.parameters.dependency-build-seconds}}"
                   }
                 ]
               }
@@ -490,62 +566,6 @@
         }
       },
       {
-        // Wheel 다운로드 전 Nexus DNS/TCP/TLS/HTTP 성능 측정
-        "name": "report-nexus-connectivity",
-        // Task가 arguments.parameters로 전달받는 입력
-        "inputs": {
-          "parameters": [
-            {
-              "name": "nexus-pypi-url"
-            },
-            {
-              "name": "phase"
-            }
-          ]
-        },
-        // 후속 Task가 참조할 Parameter 및 Artifact
-        "outputs": {
-          "parameters": [
-            {
-              "name": "report-json",
-              "valueFrom": {
-                "path": "/tmp/nexus-performance.json"
-              }
-            },
-            {
-              "name": "total-seconds",
-              "valueFrom": {
-                "path": "/tmp/total-seconds.txt"
-              }
-            },
-            {
-              "name": "http-code",
-              "valueFrom": {
-                "path": "/tmp/http-code.txt"
-              }
-            }
-          ],
-          "artifacts": [
-            {
-              "name": "nexus-performance-report",
-              "path": "/tmp/nexus-performance.json",
-              "archive": {
-                "none": {
-                }
-              }
-            }
-          ]
-        },
-        // 별도 Pod에서 실행되는 내부 Harbor 이미지와 Shell Script
-        "script": {
-          "image": "harbor.CHANGE_ME.internal/platform/curl-jq:8.8@sha256:0000000000000000000000000000000000000000000000000000000000000000",
-          "command": [
-            "sh"
-          ],
-          "source": "set -euo pipefail\nformat='{\"dnsSeconds\":%{time_namelookup},\"tcpConnectSeconds\":%{time_connect},\"tlsConnectSeconds\":%{time_appconnect},\"firstByteSeconds\":%{time_starttransfer},\"totalSeconds\":%{time_total},\"downloadBytes\":%{size_download},\"downloadSpeedBytesPerSecond\":%{speed_download},\"httpCode\":%{http_code},\"remoteIp\":\"%{remote_ip}\",\"remotePort\":%{remote_port},\"redirectCount\":%{num_redirects}}'\nmetrics=\"$(curl --silent --show-error --location --fail-with-body --output /dev/null --write-out \"$format\" -- \"{{inputs.parameters.nexus-pypi-url}}\")\"\njq -n \\\n  --argjson metrics \"$metrics\" \\\n  --arg phase \"{{inputs.parameters.phase}}\" \\\n  --arg authentication \"ANONYMOUS\" \\\n  --arg timestamp \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\" \\\n  --arg workflowName \"{{workflow.name}}\" \\\n  --arg workflowUid \"{{workflow.uid}}\" \\\n  --arg namespace \"{{workflow.namespace}}\" \\\n  '$metrics + {phase:$phase,authentication:$authentication,timestamp:$timestamp,workflowName:$workflowName,workflowUid:$workflowUid,namespace:$namespace}' \\\n  > /tmp/nexus-performance.json\njq -r '.totalSeconds' /tmp/nexus-performance.json > /tmp/total-seconds.txt\njq -r '.httpCode' /tmp/nexus-performance.json > /tmp/http-code.txt\njq '{phase,authentication,totalSeconds,httpCode}' /tmp/nexus-performance.json\n"
-        }
-      },
-      {
         // requirements.lock 우선 탐색 및 SHA-256 계산
         "name": "validate-lock",
         // 후속 Task가 참조할 Parameter 및 Artifact
@@ -582,7 +602,7 @@
         }
       },
       {
-        // Nexus에서 Wheel-only 정책으로 의존성 다운로드
+        // Dependency Cache MISS일 때만 Nexus에서 Wheel 다운로드
         "name": "download-wheels",
         // ConfigMap Semaphore를 사용해 Nexus 동시 다운로드 수 제한
         "synchronization": {
@@ -601,6 +621,9 @@
             },
             {
               "name": "lock-file-name"
+            },
+            {
+              "name": "dependency-cache-status"
             }
           ]
         },
@@ -639,7 +662,7 @@
           "command": [
             "sh"
           ],
-          "source": "set -euo pipefail\nrm -rf /workspace/generated/context/wheelhouse\nmkdir -p /workspace/generated/context/wheelhouse /workspace/generated\nstart=\"$(date +%s)\"\npython -m pip download \\\n  --index-url \"{{inputs.parameters.nexus-pypi-url}}\" \\\n  --only-binary=:all: \\\n  --prefer-binary \\\n  --disable-pip-version-check \\\n  --timeout 30 \\\n  --retries 3 \\\n  --requirement \"/workspace/generated/context/app/{{inputs.parameters.lock-file-name}}\" \\\n  --dest /workspace/generated/context/wheelhouse\nend=\"$(date +%s)\"\nseconds=\"$((end - start))\"\ncount=\"$(find /workspace/generated/context/wheelhouse -type f -name '*.whl' | wc -l | tr -d ' ')\"\n[ \"$count\" -gt 0 ] || { echo \"wheelhouse is empty\" >&2; exit 1; }\nbytes=\"$(find /workspace/generated/context/wheelhouse -type f -name '*.whl' -exec stat -c '%s' {} + | awk '{sum += $1} END {print sum + 0}')\"\naverage=\"$((bytes / (seconds > 0 ? seconds : 1)))\"\nprintf '%s' \"$count\" > /workspace/generated/wheel-count.txt\nprintf '%s' \"$bytes\" > /workspace/generated/wheel-total-bytes.txt\nprintf '%s' \"$seconds\" > /workspace/generated/download-seconds.txt\nprintf '%s' \"$average\" > /workspace/generated/average-download-bytes-per-second.txt\nprintf 'downloaded %s wheels anonymously from Nexus (%s bytes) in %s seconds\\n' \"$count\" \"$bytes\" \"$seconds\"\n",
+          "source": "set -euo pipefail\nwheelhouse=/workspace/generated/context/wheelhouse\nrm -rf \"$wheelhouse\"\nmkdir -p \"$wheelhouse\" /workspace/generated\n\nif [ '{{inputs.parameters.dependency-cache-status}}' = HIT ]; then\n  printf '0' > /workspace/generated/wheel-count.txt\n  printf '0' > /workspace/generated/wheel-total-bytes.txt\n  printf '0' > /workspace/generated/download-seconds.txt\n  printf '0' > /workspace/generated/average-download-bytes-per-second.txt\n  echo 'dependency image cache HIT; Nexus download skipped'\n  exit 0\nfi\n\nstart=\"$(date +%s)\"\npython -m pip download \\\n  --index-url \"{{inputs.parameters.nexus-pypi-url}}\" \\\n  --only-binary=:all: \\\n  --prefer-binary \\\n  --disable-pip-version-check \\\n  --timeout 30 \\\n  --retries 3 \\\n  --requirement \"/workspace/generated/context/app/{{inputs.parameters.lock-file-name}}\" \\\n  --dest \"$wheelhouse\"\nend=\"$(date +%s)\"\nseconds=\"$((end - start))\"\ncount=\"$(find \"$wheelhouse\" -type f -name '*.whl' | wc -l | tr -d ' ')\"\n[ \"$count\" -gt 0 ] || { echo \"wheelhouse is empty\" >&2; exit 1; }\nbytes=\"$(find \"$wheelhouse\" -type f -name '*.whl' -exec stat -c '%s' {} + | awk '{sum += $1} END {print sum + 0}')\"\naverage=\"$((bytes / (seconds > 0 ? seconds : 1)))\"\nprintf '%s' \"$count\" > /workspace/generated/wheel-count.txt\nprintf '%s' \"$bytes\" > /workspace/generated/wheel-total-bytes.txt\nprintf '%s' \"$seconds\" > /workspace/generated/download-seconds.txt\nprintf '%s' \"$average\" > /workspace/generated/average-download-bytes-per-second.txt\nprintf 'downloaded %s wheels anonymously from Nexus (%s bytes) in %s seconds\\n' \"$count\" \"$bytes\" \"$seconds\"\n",
           // 현재 Script가 사용할 PVC 또는 Secret Mount
           "volumeMounts": [
             {
@@ -650,7 +673,7 @@
         }
       },
       {
-        // Source·Wheel·Lock을 조합해 BuildKit Context 생성
+        // Source·Wheel·Lock과 Dependency Image Stage를 조합해 BuildKit Context 생성
         "name": "prepare-build-context",
         // Task가 arguments.parameters로 전달받는 입력
         "inputs": {
@@ -675,6 +698,9 @@
             },
             {
               "name": "cache-reference"
+            },
+            {
+              "name": "dependency-cache-status"
             }
           ]
         },
@@ -684,7 +710,7 @@
           "command": [
             "sh"
           ],
-          "source": "set -euo pipefail\ncontext=/workspace/generated/context\ntest -d \"$context/app\"\ntest -d \"$context/wheelhouse\"\nrm -rf \"$context/app/.git\"\ncp \"$context/app/{{inputs.parameters.lock-file-name}}\" \"$context/requirements.lock\"\n\n# BuildKit 전송 대상에서 개발 산출물과 중복 Lock 파일을 제외합니다.\ncat > \"$context/.dockerignore\" <<'DOCKERIGNORE'\n**/.git\n**/.venv\n**/__pycache__\n**/*.pyc\n**/.pytest_cache\n**/.mypy_cache\n**/.ruff_cache\n**/dist\n**/build\n**/node_modules\napp/requirements.lock\napp/requirements.txt\nDOCKERIGNORE\n\n# Docker 레이어 구조를 WorkflowTemplate JSON의 script.source에서 직접 생성합니다.\ncat > /workspace/generated/context/Dockerfile <<'DOCKERFILE'\n# syntax=docker/dockerfile:1.7\nARG RUNTIME_IMAGE\n\n# Layer 1: 변경 빈도가 낮은 공통 Runtime Base\nFROM ${RUNTIME_IMAGE} AS base\nENV PYTHONDONTWRITEBYTECODE=1 \\\n    PYTHONUNBUFFERED=1 \\\n    PIP_DISABLE_PIP_VERSION_CHECK=1\nWORKDIR /app\n\n# Layer 2: Lock/Wheelhouse를 소스보다 먼저 복사해 의존성 캐시 유지\nFROM base AS dependencies\nCOPY requirements.lock /build/requirements.lock\nCOPY wheelhouse /build/wheelhouse\nRUN python -m pip install \\\n      --no-index \\\n      --find-links=/build/wheelhouse \\\n      --only-binary=:all: \\\n      --prefix=/opt/python-dependencies \\\n      -r /build/requirements.lock \\\n    && rm -rf /root/.cache/pip /build/wheelhouse\n\n# Layer 3: 테스트 전용 계층이며 최종 Release 이미지에는 포함하지 않음\nFROM base AS test\nCOPY --from=dependencies /opt/python-dependencies/ /usr/local/\nCOPY app /app\nRUN python -m compileall -q /app \\\n    && if [ -d /app/tests ]; then python -m pytest -q /app/tests; fi \\\n    && touch /test-passed\n\n# Layer 4: 자주 변경되는 애플리케이션 소스를 의존성 다음에 배치\nFROM base AS source-clean\nCOPY app /clean-app\nRUN rm -rf /clean-app/tests /clean-app/test /clean-app/.git \\\n    /clean-app/.pytest_cache /clean-app/.mypy_cache /clean-app/.ruff_cache\n\n# Layer 5: 실행 의존성과 정리된 소스만 포함한 최종 이미지\nFROM base AS release\n# Test Stage 성공 표식을 복사하여 Release 빌드가 Test 실행을 강제로 의존\nCOPY --from=test /test-passed /tmp/test-passed\nCOPY --from=dependencies /opt/python-dependencies/ /usr/local/\nCOPY --from=source-clean /clean-app /app\nRUN rm -f /tmp/test-passed\nUSER 10001:10001\nCMD [\"python\", \"-m\", \"app\"]\nDOCKERFILE\n\nprintf '%s' 'base,dependencies,test,source-clean,release' > /workspace/generated/docker-layer-stages.txt\ncat > /workspace/generated/build-spec.json <<'JSON'\n{\n  \"repositoryName\": \"{{inputs.parameters.repository-name}}\",\n  \"runtimeImage\": \"{{inputs.parameters.runtime-image}}\",\n  \"parentImageDigest\": \"{{inputs.parameters.parent-image-digest}}\",\n  \"lockFileName\": \"{{inputs.parameters.lock-file-name}}\",\n  \"lockHash\": \"{{inputs.parameters.lock-hash}}\",\n  \"imageReference\": \"{{inputs.parameters.image-reference}}\",\n  \"cacheReference\": \"{{inputs.parameters.cache-reference}}\",\n  \"dockerLayerStages\": [\"base\", \"dependencies\", \"test\", \"source-clean\", \"release\"]\n}\nJSON\ntest -s /workspace/generated/context/Dockerfile\ntest -s /workspace/generated/build-spec.json\nprintf 'Docker layers: base -> dependencies -> test -> source-clean -> release\\n'\n",
+          "source": "set -euo pipefail\ncontext=/workspace/generated/context\ntest -d \"$context/app\"\ntest -d \"$context/wheelhouse\"\nif [ '{{inputs.parameters.dependency-cache-status}}' = MISS ]; then\n  find \"$context/wheelhouse\" -type f -name '*.whl' -print -quit | grep -q . || { echo 'wheelhouse is empty on cache MISS' >&2; exit 1; }\nfi\nif [ '{{inputs.parameters.dependency-cache-status}}' = MISS ]; then\n  find \"$context/wheelhouse\" -type f -name '*.whl' -print -quit | grep -q . || { echo 'wheelhouse is empty on cache MISS' >&2; exit 1; }\nfi\nrm -rf \"$context/app/.git\"\ncp \"$context/app/{{inputs.parameters.lock-file-name}}\" \"$context/requirements.lock\"\n\n# BuildKit 전송 대상에서 개발 산출물과 중복 Lock 파일을 제외합니다.\ncat > \"$context/.dockerignore\" <<'DOCKERIGNORE'\n**/.git\n**/.venv\n**/__pycache__\n**/*.pyc\n**/.pytest_cache\n**/.mypy_cache\n**/.ruff_cache\n**/dist\n**/build\n**/node_modules\napp/requirements.lock\napp/requirements.txt\nDOCKERIGNORE\n\n# Docker 레이어 구조를 WorkflowTemplate JSON의 script.source에서 직접 생성합니다.\ncat > /workspace/generated/context/Dockerfile <<'DOCKERFILE'\n# syntax=docker/dockerfile:1.7\nARG RUNTIME_IMAGE\nARG DEPENDENCY_IMAGE\n\n# Cache MISS에서만 실행해 Lock Hash 전용 Dependency Image를 생성\nFROM ${RUNTIME_IMAGE} AS dependency-image\nENV PIP_DISABLE_PIP_VERSION_CHECK=1\nCOPY requirements.lock /build/requirements.lock\nCOPY wheelhouse /build/wheelhouse\nRUN python -m pip install \\\n      --no-index \\\n      --find-links=/build/wheelhouse \\\n      --only-binary=:all: \\\n      --prefix=/opt/python-dependencies \\\n      -r /build/requirements.lock \\\n    && rm -rf /root/.cache/pip /build/wheelhouse\n\n# Cache HIT/MISS 모두 Harbor Digest로 고정된 Dependency Image 사용\nFROM ${DEPENDENCY_IMAGE} AS dependencies\n\nFROM ${RUNTIME_IMAGE} AS base\nENV PYTHONDONTWRITEBYTECODE=1 \\\n    PYTHONUNBUFFERED=1 \\\n    PIP_DISABLE_PIP_VERSION_CHECK=1\nWORKDIR /app\n\nFROM base AS test\nCOPY --from=dependencies /opt/python-dependencies/ /usr/local/\nCOPY app /app\nRUN python -m compileall -q /app \\\n    && if [ -d /app/tests ]; then python -m pytest -q /app/tests; fi \\\n    && touch /test-passed\n\nFROM base AS source-clean\nCOPY app /clean-app\nRUN rm -rf /clean-app/tests /clean-app/test /clean-app/.git \\\n    /clean-app/.pytest_cache /clean-app/.mypy_cache /clean-app/.ruff_cache\n\nFROM base AS release\nCOPY --from=test /test-passed /tmp/test-passed\nCOPY --from=dependencies /opt/python-dependencies/ /usr/local/\nCOPY --from=source-clean /clean-app /app\nRUN rm -f /tmp/test-passed\nUSER 10001:10001\nCMD [\"python\", \"-m\", \"app\"]\nDOCKERFILE\n\nprintf '%s' 'dependency-image,dependencies,base,test,source-clean,release' > /workspace/generated/docker-layer-stages.txt\ncat > /workspace/generated/build-spec.json <<'JSON'\n{\n  \"repositoryName\": \"{{inputs.parameters.repository-name}}\",\n  \"runtimeImage\": \"{{inputs.parameters.runtime-image}}\",\n  \"parentImageDigest\": \"{{inputs.parameters.parent-image-digest}}\",\n  \"lockFileName\": \"{{inputs.parameters.lock-file-name}}\",\n  \"lockHash\": \"{{inputs.parameters.lock-hash}}\",\n  \"imageReference\": \"{{inputs.parameters.image-reference}}\",\n  \"cacheReference\": \"{{inputs.parameters.cache-reference}}\",\n  \"dockerLayerStages\": [\"dependency-image\", \"dependencies\", \"base\", \"test\", \"source-clean\", \"release\"]\n}\nJSON\ntest -s /workspace/generated/context/Dockerfile\ntest -s /workspace/generated/build-spec.json\nprintf 'Docker layers: dependency-image -> dependencies -> base -> test -> source-clean -> release\\n'\n",
           // 현재 Script가 사용할 PVC 또는 Secret Mount
           "volumeMounts": [
             {
@@ -711,6 +737,9 @@
             },
             {
               "name": "cache-reference"
+            },
+            {
+              "name": "dependency-image"
             }
           ]
         },
@@ -755,7 +784,7 @@
               "value": "/root/.docker"
             }
           ],
-          "source": "set -euo pipefail\nmkdir -p /workspace/generated\nstart=\"$(date +%s)\"\nprintf '[BuildKit] release build and Harbor push started at %s\\n' \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"\nbuildctl --addr \"{{inputs.parameters.buildkit-address}}\" build \\\n  --progress=plain \\\n  --frontend dockerfile.v0 \\\n  --local context=/workspace/generated/context \\\n  --local dockerfile=/workspace/generated/context \\\n  --opt filename=Dockerfile \\\n  --opt target=release \\\n  --opt \"build-arg:RUNTIME_IMAGE={{inputs.parameters.runtime-image}}\" \\\n  --import-cache \"type=registry,ref={{inputs.parameters.cache-reference}}\" \\\n  --export-cache \"type=registry,ref={{inputs.parameters.cache-reference}},mode=min\" \\\n  --output \"type=image,name={{inputs.parameters.image-reference}},push=true\" \\\n  --metadata-file /workspace/generated/build-metadata.json\nend=\"$(date +%s)\"\ndigest=\"$(jq -r '.\"containerimage.digest\" // .\"containerimage.descriptor\".digest // empty' /workspace/generated/build-metadata.json)\"\nprintf '%s' \"$digest\" | grep -Eq '^sha256:[0-9a-f]{64}$' || { echo \"BuildKit did not return a valid image digest\" >&2; exit 1; }\nprintf '%s' \"{{inputs.parameters.image-reference}}\" > /workspace/generated/image-reference.txt\nprintf '%s' \"$digest\" > /workspace/generated/image-digest.txt\nprintf '%s' \"$((end - start))\" > /workspace/generated/build-seconds.txt\nprintf '%s' '0' > /workspace/generated/push-seconds.txt\nprintf '[BuildKit] release build, cache export and Harbor push completed in %s seconds: %s@%s\\n' \\\n  \"$((end - start))\" \"{{inputs.parameters.image-reference}}\" \"$digest\"\n",
+          "source": "set -euo pipefail\nmkdir -p /workspace/generated\nstart=\"$(date +%s)\"\nprintf '[BuildKit] release build and Harbor push started at %s\\n' \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"\nbuildctl --addr \"{{inputs.parameters.buildkit-address}}\" build \\\n  --progress=plain \\\n  --frontend dockerfile.v0 \\\n  --local context=/workspace/generated/context \\\n  --local dockerfile=/workspace/generated/context \\\n  --opt filename=Dockerfile \\\n  --opt target=release \\\n  --opt \"build-arg:RUNTIME_IMAGE={{inputs.parameters.runtime-image}}\" \\\n  --opt \"build-arg:DEPENDENCY_IMAGE={{inputs.parameters.dependency-image}}\" \\\n  --opt \"build-arg:DEPENDENCY_IMAGE={{inputs.parameters.dependency-image}}\" \\\n  --import-cache \"type=registry,ref={{inputs.parameters.cache-reference}}\" \\\n  --export-cache \"type=registry,ref={{inputs.parameters.cache-reference}},mode=min\" \\\n  --output \"type=image,name={{inputs.parameters.image-reference}},push=true\" \\\n  --metadata-file /workspace/generated/build-metadata.json\nend=\"$(date +%s)\"\ndigest=\"$(jq -r '.\"containerimage.digest\" // .\"containerimage.descriptor\".digest // empty' /workspace/generated/build-metadata.json)\"\nprintf '%s' \"$digest\" | grep -Eq '^sha256:[0-9a-f]{64}$' || { echo \"BuildKit did not return a valid image digest\" >&2; exit 1; }\nprintf '%s' \"{{inputs.parameters.image-reference}}\" > /workspace/generated/image-reference.txt\nprintf '%s' \"$digest\" > /workspace/generated/image-digest.txt\nprintf '%s' \"$((end - start))\" > /workspace/generated/build-seconds.txt\nprintf '%s' '0' > /workspace/generated/push-seconds.txt\nprintf '[BuildKit] release build, cache export and Harbor push completed in %s seconds: %s@%s\\n' \\\n  \"$((end - start))\" \"{{inputs.parameters.image-reference}}\" \"$digest\"\n",
           // 현재 Script가 사용할 PVC 또는 Secret Mount
           "volumeMounts": [
             {
@@ -802,7 +831,7 @@
         }
       },
       {
-        // 빌드·Wheel·Nexus 지표를 Build Report JSON으로 집계
+        // 빌드·Wheel·Dependency Cache 지표를 Build Report JSON으로 집계
         "name": "generate-build-report",
         // Task가 arguments.parameters로 전달받는 입력
         "inputs": {
@@ -841,13 +870,22 @@
               "name": "average-download-bytes-per-second"
             },
             {
-              "name": "nexus-before-download-total-seconds"
-            },
-            {
-              "name": "nexus-after-download-total-seconds"
-            },
-            {
               "name": "build-seconds"
+            },
+            {
+              "name": "dependency-cache-status"
+            },
+            {
+              "name": "dependency-cache-key"
+            },
+            {
+              "name": "dependency-image-reference"
+            },
+            {
+              "name": "dependency-image-result"
+            },
+            {
+              "name": "dependency-build-seconds"
             }
           ]
         },
@@ -878,7 +916,7 @@
           "command": [
             "sh"
           ],
-          "source": "set -euo pipefail\nmkdir -p /workspace/output\njq -n \\\n  --arg workflowName \"{{workflow.name}}\" \\\n  --arg workflowUid \"{{workflow.uid}}\" \\\n  --arg namespace \"{{workflow.namespace}}\" \\\n  --arg repositoryName \"{{inputs.parameters.repository-name}}\" \\\n  --arg imageReference \"{{inputs.parameters.image-reference}}\" \\\n  --arg imageDigest \"{{inputs.parameters.image-digest}}\" \\\n  --arg parentImageDigest \"{{inputs.parameters.parent-image-digest}}\" \\\n  --arg runtimeImage \"{{inputs.parameters.runtime-image}}\" \\\n  --arg lockFileName \"{{inputs.parameters.lock-file-name}}\" \\\n  --arg lockHash \"{{inputs.parameters.lock-hash}}\" \\\n  --argjson wheelCount \"{{inputs.parameters.wheel-count}}\" \\\n  --argjson wheelTotalBytes \"{{inputs.parameters.wheel-total-bytes}}\" \\\n  --argjson wheelDownloadSeconds \"{{inputs.parameters.wheel-download-seconds}}\" \\\n  --argjson averageDownloadBytesPerSecond \"{{inputs.parameters.average-download-bytes-per-second}}\" \\\n  --argjson nexusBeforeDownloadTotalSeconds \"{{inputs.parameters.nexus-before-download-total-seconds}}\" \\\n  --argjson nexusAfterDownloadTotalSeconds \"{{inputs.parameters.nexus-after-download-total-seconds}}\" \\\n  --argjson buildSeconds \"{{inputs.parameters.build-seconds}}\" \\\n  --arg timestamp \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\" \\\n  '{workflowName:$workflowName,workflowUid:$workflowUid,namespace:$namespace,repositoryName:$repositoryName,imageReference:$imageReference,imageDigest:$imageDigest,parentImageDigest:$parentImageDigest,runtimeImage:$runtimeImage,lockFileName:$lockFileName,lockHash:$lockHash,wheelCount:$wheelCount,wheelTotalBytes:$wheelTotalBytes,wheelDownloadSeconds:$wheelDownloadSeconds,averageDownloadBytesPerSecond:$averageDownloadBytesPerSecond,nexusBeforeDownloadTotalSeconds:$nexusBeforeDownloadTotalSeconds,nexusAfterDownloadTotalSeconds:$nexusAfterDownloadTotalSeconds,testIncludedInReleaseBuild:true,buildSeconds:$buildSeconds,packageRepository:\"nexus\",wheelOnly:true,status:\"SUCCEEDED\",timestamp:$timestamp}' \\\n  > /workspace/output/build-report.json\njq . /workspace/output/build-report.json\n",
+          "source": "set -euo pipefail\nmkdir -p /workspace/output\njq -n \\\n  --arg workflowName \"{{workflow.name}}\" \\\n  --arg workflowUid \"{{workflow.uid}}\" \\\n  --arg namespace \"{{workflow.namespace}}\" \\\n  --arg repositoryName \"{{inputs.parameters.repository-name}}\" \\\n  --arg imageReference \"{{inputs.parameters.image-reference}}\" \\\n  --arg imageDigest \"{{inputs.parameters.image-digest}}\" \\\n  --arg parentImageDigest \"{{inputs.parameters.parent-image-digest}}\" \\\n  --arg runtimeImage \"{{inputs.parameters.runtime-image}}\" \\\n  --arg lockFileName \"{{inputs.parameters.lock-file-name}}\" \\\n  --arg lockHash \"{{inputs.parameters.lock-hash}}\" \\\n  --argjson wheelCount \"{{inputs.parameters.wheel-count}}\" \\\n  --argjson wheelTotalBytes \"{{inputs.parameters.wheel-total-bytes}}\" \\\n  --argjson wheelDownloadSeconds \"{{inputs.parameters.wheel-download-seconds}}\" \\\n  --argjson averageDownloadBytesPerSecond \"{{inputs.parameters.average-download-bytes-per-second}}\" \\\n  --arg dependencyCacheStatus \"{{inputs.parameters.dependency-cache-status}}\" \\\n  --arg dependencyCacheKey \"{{inputs.parameters.dependency-cache-key}}\" \\\n  --arg dependencyImageReference \"{{inputs.parameters.dependency-image-reference}}\" \\\n  --arg dependencyImageResult \"{{inputs.parameters.dependency-image-result}}\" \\\n  --argjson dependencyBuildSeconds \"{{inputs.parameters.dependency-build-seconds}}\" \\\n  --argjson buildSeconds \"{{inputs.parameters.build-seconds}}\" \\\n  --arg timestamp \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\" \\\n  '{workflowName:$workflowName,workflowUid:$workflowUid,namespace:$namespace,repositoryName:$repositoryName,imageReference:$imageReference,imageDigest:$imageDigest,parentImageDigest:$parentImageDigest,runtimeImage:$runtimeImage,lockFileName:$lockFileName,lockHash:$lockHash,wheelCount:$wheelCount,wheelTotalBytes:$wheelTotalBytes,wheelDownloadSeconds:$wheelDownloadSeconds,averageDownloadBytesPerSecond:$averageDownloadBytesPerSecond,testIncludedInReleaseBuild:true,dependencyCacheStatus:$dependencyCacheStatus,dependencyCacheKey:$dependencyCacheKey,dependencyImageReference:$dependencyImageReference,dependencyImageResult:$dependencyImageResult,dependencyBuildSeconds:$dependencyBuildSeconds,buildSeconds:$buildSeconds,packageRepository:\"nexus\",wheelOnly:true,status:\"SUCCEEDED\",timestamp:$timestamp}' \\\n  > /workspace/output/build-report.json\njq . /workspace/output/build-report.json\n",
           // 현재 Script가 사용할 PVC 또는 Secret Mount
           "volumeMounts": [
             {
@@ -909,6 +947,187 @@
             "sh"
           ],
           "source": "set -euo pipefail\nprintf '%s\\n' '{{inputs.parameters.report-json}}' | jq .\nurl='{{inputs.parameters.notification-server-url}}'\nif [ -z \"$url\" ]; then\n  echo \"notification-server-url is empty; notification skipped\"\n  exit 0\nfi\nprintf '%s' '{{inputs.parameters.report-json}}' > /tmp/build-report.json\ncurl --silent --show-error --fail-with-body \\\n  --retry 3 --retry-all-errors \\\n  --header 'Content-Type: application/json' \\\n  --data-binary @/tmp/build-report.json \\\n  -- \"$url\"\n"
+        }
+      },
+      {
+        // Lock·Runtime·ABI·Platform Key로 Harbor Dependency Image 조회
+        "name": "check-dependency-image",
+        // Task가 arguments.parameters로 전달받는 입력
+        "inputs": {
+          "parameters": [
+            {
+              "name": "cache-registry-address"
+            },
+            {
+              "name": "lock-hash"
+            },
+            {
+              "name": "runtime-image-digest"
+            },
+            {
+              "name": "python-abi"
+            },
+            {
+              "name": "target-platform"
+            },
+            {
+              "name": "force-rebuild"
+            }
+          ]
+        },
+        // 후속 Task가 참조할 Parameter 및 Artifact
+        "outputs": {
+          "parameters": [
+            {
+              "name": "cache-status",
+              "valueFrom": {
+                "path": "/tmp/dependency-cache-status.txt"
+              }
+            },
+            {
+              "name": "dependency-cache-key",
+              "valueFrom": {
+                "path": "/tmp/dependency-cache-key.txt"
+              }
+            },
+            {
+              "name": "dependency-mutex-key",
+              "valueFrom": {
+                "path": "/tmp/dependency-mutex-key.txt"
+              }
+            },
+            {
+              "name": "dependency-image-tag",
+              "valueFrom": {
+                "path": "/tmp/dependency-image-tag.txt"
+              }
+            },
+            {
+              "name": "dependency-image-reference",
+              "valueFrom": {
+                "path": "/tmp/dependency-image-reference.txt"
+              }
+            },
+            {
+              "name": "dependency-image-digest",
+              "valueFrom": {
+                "path": "/tmp/dependency-image-digest.txt"
+              }
+            }
+          ]
+        },
+        // 별도 Pod에서 실행되는 내부 Harbor 이미지와 Shell Script
+        "script": {
+          "image": "harbor.CHANGE_ME.internal/platform/buildkit-client-tools:1.0.0@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+          "command": [
+            "sh"
+          ],
+          "env": [
+            {
+              "name": "DOCKER_CONFIG",
+              "value": "/root/.docker"
+            }
+          ],
+          "source": "set -euo pipefail\nlock_hash='{{inputs.parameters.lock-hash}}'\nruntime_digest='{{inputs.parameters.runtime-image-digest}}'\npython_abi='{{inputs.parameters.python-abi}}'\ntarget_platform='{{inputs.parameters.target-platform}}'\nforce_rebuild='{{inputs.parameters.force-rebuild}}'\n\nprintf '%s' \"$lock_hash\" | grep -Eq '^[0-9a-f]{64}$' || { echo 'invalid lock hash' >&2; exit 1; }\nprintf '%s' \"$runtime_digest\" | grep -Eq '^sha256:[0-9a-f]{64}$' || { echo 'invalid runtime digest' >&2; exit 1; }\nprintf '%s' \"$python_abi\" | grep -Eq '^[a-zA-Z0-9._-]+$' || { echo 'invalid python ABI' >&2; exit 1; }\nprintf '%s' \"$target_platform\" | grep -Eq '^[a-zA-Z0-9._-]+$' || { echo 'invalid target platform' >&2; exit 1; }\n[ \"$force_rebuild\" = false ] || [ \"$force_rebuild\" = true ] || { echo 'force-rebuild must be true or false' >&2; exit 1; }\n\nruntime_short=\"$(printf '%s' \"${runtime_digest#sha256:}\" | cut -c1-12)\"\ncache_key=\"${lock_hash}-${runtime_short}-${python_abi}-${target_platform}\"\nmutex_key=\"$(printf '%s' \"$cache_key\" | sha256sum | awk '{print substr($1,1,24)}')\"\nimage_tag='{{inputs.parameters.cache-registry-address}}/python-deps:'\"$cache_key\"\nstatus=MISS\ndigest=''\nimage_reference=\"$image_tag\"\n\nif [ \"$force_rebuild\" = false ]; then\n  if digest=\"$(crane digest \"$image_tag\" 2>/tmp/crane-error.txt)\"; then\n    printf '%s' \"$digest\" | grep -Eq '^sha256:[0-9a-f]{64}$' || { echo 'Harbor returned an invalid digest' >&2; exit 1; }\n    status=HIT\n    image_reference=\"${image_tag}@${digest}\"\n  elif grep -Eqi 'manifest unknown|name unknown|not found|404' /tmp/crane-error.txt; then\n    status=MISS\n  else\n    echo 'Harbor dependency cache lookup failed:' >&2\n    cat /tmp/crane-error.txt >&2\n    exit 1\n  fi\nfi\n\nprintf '%s' \"$status\" > /tmp/dependency-cache-status.txt\nprintf '%s' \"$cache_key\" > /tmp/dependency-cache-key.txt\nprintf '%s' \"$mutex_key\" > /tmp/dependency-mutex-key.txt\nprintf '%s' \"$image_tag\" > /tmp/dependency-image-tag.txt\nprintf '%s' \"$image_reference\" > /tmp/dependency-image-reference.txt\nprintf '%s' \"$digest\" > /tmp/dependency-image-digest.txt\nprintf 'dependency image cache: %s (%s)\\n' \"$status\" \"$image_reference\"\n",
+          // 현재 Script가 사용할 PVC 또는 Secret Mount
+          "volumeMounts": [
+            {
+              "name": "registry-auth",
+              "mountPath": "/root/.docker",
+              "readOnly": true
+            }
+          ]
+        }
+      },
+      {
+        // Cache MISS일 때만 Dependency Image 생성 후 Digest 고정
+        "name": "build-dependency-image",
+        // ConfigMap Semaphore를 사용해 Nexus 동시 다운로드 수 제한
+        "synchronization": {
+          "mutex": {
+            "name": "dependency-image-{{inputs.parameters.dependency-mutex-key}}"
+          }
+        },
+        // Task가 arguments.parameters로 전달받는 입력
+        "inputs": {
+          "parameters": [
+            {
+              "name": "cache-status"
+            },
+            {
+              "name": "dependency-image-tag"
+            },
+            {
+              "name": "dependency-image-reference"
+            },
+            {
+              "name": "dependency-mutex-key"
+            },
+            {
+              "name": "force-rebuild"
+            },
+            {
+              "name": "buildkit-address"
+            },
+            {
+              "name": "runtime-image"
+            }
+          ]
+        },
+        // 후속 Task가 참조할 Parameter 및 Artifact
+        "outputs": {
+          "parameters": [
+            {
+              "name": "dependency-image-reference",
+              "valueFrom": {
+                "path": "/workspace/generated/dependency-image-reference.txt"
+              }
+            },
+            {
+              "name": "dependency-image-digest",
+              "valueFrom": {
+                "path": "/workspace/generated/dependency-image-digest.txt"
+              }
+            },
+            {
+              "name": "dependency-image-result",
+              "valueFrom": {
+                "path": "/workspace/generated/dependency-image-result.txt"
+              }
+            },
+            {
+              "name": "dependency-build-seconds",
+              "valueFrom": {
+                "path": "/workspace/generated/dependency-build-seconds.txt"
+              }
+            }
+          ]
+        },
+        // 별도 Pod에서 실행되는 내부 Harbor 이미지와 Shell Script
+        "script": {
+          "image": "harbor.CHANGE_ME.internal/platform/buildkit-client-tools:1.0.0@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+          "command": [
+            "sh"
+          ],
+          "env": [
+            {
+              "name": "DOCKER_CONFIG",
+              "value": "/root/.docker"
+            }
+          ],
+          "source": "set -euo pipefail\nmkdir -p /workspace/generated\nimage_tag='{{inputs.parameters.dependency-image-tag}}'\ninput_reference='{{inputs.parameters.dependency-image-reference}}'\nforce_rebuild='{{inputs.parameters.force-rebuild}}'\ndigest=''\nresult=REUSED\nseconds=0\n\nif [ '{{inputs.parameters.cache-status}}' = HIT ] && [ \"$force_rebuild\" = false ]; then\n  digest=\"${input_reference##*@}\"\n  reference=\"$input_reference\"\nelse\n  # Mutex 대기 중 다른 Workflow가 이미 생성했을 수 있으므로 다시 확인한다.\n  if [ \"$force_rebuild\" = false ] && digest=\"$(crane digest \"$image_tag\" 2>/tmp/crane-error.txt)\"; then\n    result=REUSED_AFTER_WAIT\n    reference=\"${image_tag}@${digest}\"\n  else\n    if [ \"$force_rebuild\" = false ] && ! grep -Eqi 'manifest unknown|name unknown|not found|404' /tmp/crane-error.txt; then\n      echo 'Harbor dependency cache recheck failed:' >&2\n      cat /tmp/crane-error.txt >&2\n      exit 1\n    fi\n    start=\"$(date +%s)\"\n    buildctl --addr '{{inputs.parameters.buildkit-address}}' build \\\n      --progress=plain \\\n      --frontend dockerfile.v0 \\\n      --local context=/workspace/generated/context \\\n      --local dockerfile=/workspace/generated/context \\\n      --opt filename=Dockerfile \\\n      --opt target=dependency-image \\\n      --opt 'build-arg:RUNTIME_IMAGE={{inputs.parameters.runtime-image}}' \\\n      --opt \"build-arg:DEPENDENCY_IMAGE=${image_tag}\" \\\n      --output \"type=image,name=${image_tag},push=true\" \\\n      --metadata-file /workspace/generated/dependency-build-metadata.json\n    end=\"$(date +%s)\"\n    seconds=\"$((end - start))\"\n    digest=\"$(jq -r '.\"containerimage.digest\" // .\"containerimage.descriptor\".digest // empty' /workspace/generated/dependency-build-metadata.json)\"\n    result=BUILT\n    reference=\"${image_tag}@${digest}\"\n  fi\nfi\n\nprintf '%s' \"$digest\" | grep -Eq '^sha256:[0-9a-f]{64}$' || { echo 'invalid dependency image digest' >&2; exit 1; }\nprintf '%s' \"$reference\" > /workspace/generated/dependency-image-reference.txt\nprintf '%s' \"$digest\" > /workspace/generated/dependency-image-digest.txt\nprintf '%s' \"$result\" > /workspace/generated/dependency-image-result.txt\nprintf '%s' \"$seconds\" > /workspace/generated/dependency-build-seconds.txt\nprintf 'dependency image %s: %s\\n' \"$result\" \"$reference\"\n",
+          // 현재 Script가 사용할 PVC 또는 Secret Mount
+          "volumeMounts": [
+            {
+              "name": "workspace",
+              "mountPath": "/workspace"
+            },
+            {
+              "name": "registry-auth",
+              "mountPath": "/root/.docker",
+              "readOnly": true
+            }
+          ]
         }
       }
     ]
