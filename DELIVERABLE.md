@@ -132,19 +132,8 @@ spec:
             value: "{{workflow.parameters.registry-address}}/{{workflow.parameters.registry-project}}/{{tasks.get-repository-name-from-git.outputs.parameters.repository-name}}:{{workflow.parameters.image-tag}}"
           - name: cache-reference
             value: "{{workflow.parameters.cache-registry-address}}/{{tasks.get-repository-name-from-git.outputs.parameters.repository-name}}:buildcache"
-      - name: build-test-target
-        depends: prepare-build-context.Succeeded
-        template: build-test-target
-        arguments:
-          parameters:
-          - name: buildkit-address
-            value: "{{workflow.parameters.buildkit-address}}"
-          - name: runtime-image
-            value: "{{tasks.validate-runtime-image.outputs.parameters.runtime-image}}"
-          - name: cache-reference
-            value: "{{workflow.parameters.cache-registry-address}}/{{tasks.get-repository-name-from-git.outputs.parameters.repository-name}}:buildcache"
       - name: build-release-image
-        depends: build-test-target.Succeeded
+        depends: prepare-build-context.Succeeded
         template: build-release-image
         arguments:
           parameters:
@@ -196,8 +185,6 @@ spec:
             value: "{{tasks.report-nexus-after-download.outputs.parameters.total-seconds}}"
           - name: build-seconds
             value: "{{tasks.build-release-image.outputs.parameters.build-seconds}}"
-          - name: test-build-seconds
-            value: "{{tasks.build-test-target.outputs.parameters.test-build-seconds}}"
       - name: notify-build-result
         depends: generate-build-report.Succeeded
         template: notify-build-result
@@ -461,7 +448,7 @@ spec:
         rm -rf /workspace/generated/context
         mkdir -p /workspace/generated/context/app /workspace/generated/context/wheelhouse
         cp -a /workspace/source/. /workspace/generated/context/app/
-        rm -rf /workspace/generated/context/app/.git /workspace/generated/context/app/tests /workspace/generated/context/app/test
+        rm -rf /workspace/generated/context/app/.git
         cp -a /workspace/wheelhouse/. /workspace/generated/context/wheelhouse/
         cp "/workspace/source/{{inputs.parameters.lock-file-name}}" /workspace/generated/context/requirements.lock
 
@@ -494,7 +481,8 @@ spec:
         COPY --from=dependencies /opt/python-dependencies/ /usr/local/
         COPY app /app
         RUN python -m compileall -q /app \
-            && if [ -d /app/tests ]; then python -m pytest -q /app/tests; fi
+            && if [ -d /app/tests ]; then python -m pytest -q /app/tests; fi \
+            && touch /test-passed
 
         # Layer 4: 자주 변경되는 애플리케이션 소스를 의존성 다음에 배치
         FROM base AS source-clean
@@ -504,8 +492,11 @@ spec:
 
         # Layer 5: 실행 의존성과 정리된 소스만 포함한 최종 이미지
         FROM base AS release
+        # Test Stage 성공 표식을 복사하여 Release 빌드가 Test 실행을 강제로 의존
+        COPY --from=test /test-passed /tmp/test-passed
         COPY --from=dependencies /opt/python-dependencies/ /usr/local/
         COPY --from=source-clean /clean-app /app
+        RUN rm -f /tmp/test-passed
         USER 10001:10001
         CMD ["python", "-m", "app"]
         DOCKERFILE
@@ -529,48 +520,6 @@ spec:
       volumeMounts:
       - name: workspace
         mountPath: "/workspace"
-  - name: build-test-target
-    inputs:
-      parameters:
-      - name: buildkit-address
-      - name: runtime-image
-      - name: cache-reference
-    script:
-      image: harbor.CHANGE_ME.internal/platform/buildkit-client-tools:1.0.0@sha256:0000000000000000000000000000000000000000000000000000000000000000
-      command:
-      - sh
-      env:
-      - name: DOCKER_CONFIG
-        value: "/root/.docker"
-      source: |
-        set -euo pipefail
-        mkdir -p /workspace/generated
-        start="$(date +%s)"
-        printf '[BuildKit] test build started at %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-        buildctl --addr "{{inputs.parameters.buildkit-address}}" build \
-          --progress=plain \
-          --frontend dockerfile.v0 \
-          --local context=/workspace/generated/context \
-          --local dockerfile=/workspace/generated/context \
-          --opt filename=Dockerfile \
-          --opt target=test \
-          --opt "build-arg:RUNTIME_IMAGE={{inputs.parameters.runtime-image}}" \
-          --import-cache "type=registry,ref={{inputs.parameters.cache-reference}}" \
-          --output type=cacheonly
-        end="$(date +%s)"
-        printf '%s' "$((end - start))" > /workspace/generated/test-build-seconds.txt
-        printf '[BuildKit] test build completed in %s seconds\n' "$((end - start))"
-      volumeMounts:
-      - name: workspace
-        mountPath: "/workspace"
-      - name: registry-auth
-        mountPath: "/root/.docker"
-        readOnly: true
-    outputs:
-      parameters:
-      - name: test-build-seconds
-        valueFrom:
-          path: "/workspace/generated/test-build-seconds.txt"
   - name: build-release-image
     inputs:
       parameters:
@@ -666,7 +615,6 @@ spec:
       - name: nexus-before-download-total-seconds
       - name: nexus-after-download-total-seconds
       - name: build-seconds
-      - name: test-build-seconds
     outputs:
       parameters:
       - name: report-json
@@ -701,10 +649,9 @@ spec:
           --argjson averageDownloadBytesPerSecond "{{inputs.parameters.average-download-bytes-per-second}}" \
           --argjson nexusBeforeDownloadTotalSeconds "{{inputs.parameters.nexus-before-download-total-seconds}}" \
           --argjson nexusAfterDownloadTotalSeconds "{{inputs.parameters.nexus-after-download-total-seconds}}" \
-          --argjson testBuildSeconds "{{inputs.parameters.test-build-seconds}}" \
           --argjson buildSeconds "{{inputs.parameters.build-seconds}}" \
           --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-          '{workflowName:$workflowName,workflowUid:$workflowUid,namespace:$namespace,repositoryName:$repositoryName,imageReference:$imageReference,imageDigest:$imageDigest,parentImageDigest:$parentImageDigest,runtimeImage:$runtimeImage,lockFileName:$lockFileName,lockHash:$lockHash,wheelCount:$wheelCount,wheelTotalBytes:$wheelTotalBytes,wheelDownloadSeconds:$wheelDownloadSeconds,averageDownloadBytesPerSecond:$averageDownloadBytesPerSecond,nexusBeforeDownloadTotalSeconds:$nexusBeforeDownloadTotalSeconds,nexusAfterDownloadTotalSeconds:$nexusAfterDownloadTotalSeconds,testBuildSeconds:$testBuildSeconds,buildSeconds:$buildSeconds,packageRepository:"nexus",wheelOnly:true,status:"SUCCEEDED",timestamp:$timestamp}' \
+          '{workflowName:$workflowName,workflowUid:$workflowUid,namespace:$namespace,repositoryName:$repositoryName,imageReference:$imageReference,imageDigest:$imageDigest,parentImageDigest:$parentImageDigest,runtimeImage:$runtimeImage,lockFileName:$lockFileName,lockHash:$lockHash,wheelCount:$wheelCount,wheelTotalBytes:$wheelTotalBytes,wheelDownloadSeconds:$wheelDownloadSeconds,averageDownloadBytesPerSecond:$averageDownloadBytesPerSecond,nexusBeforeDownloadTotalSeconds:$nexusBeforeDownloadTotalSeconds,nexusAfterDownloadTotalSeconds:$nexusAfterDownloadTotalSeconds,testIncludedInReleaseBuild:true,buildSeconds:$buildSeconds,packageRepository:"nexus",wheelOnly:true,status:"SUCCEEDED",timestamp:$timestamp}' \
           > /workspace/output/build-report.json
         jq . /workspace/output/build-report.json
       volumeMounts:
@@ -972,29 +919,8 @@ spec:
               }
             },
             {
-              "name": "build-test-target",
-              "depends": "prepare-build-context.Succeeded",
-              "template": "build-test-target",
-              "arguments": {
-                "parameters": [
-                  {
-                    "name": "buildkit-address",
-                    "value": "{{workflow.parameters.buildkit-address}}"
-                  },
-                  {
-                    "name": "runtime-image",
-                    "value": "{{tasks.validate-runtime-image.outputs.parameters.runtime-image}}"
-                  },
-                  {
-                    "name": "cache-reference",
-                    "value": "{{workflow.parameters.cache-registry-address}}/{{tasks.get-repository-name-from-git.outputs.parameters.repository-name}}:buildcache"
-                  }
-                ]
-              }
-            },
-            {
               "name": "build-release-image",
-              "depends": "build-test-target.Succeeded",
+              "depends": "prepare-build-context.Succeeded",
               "template": "build-release-image",
               "arguments": {
                 "parameters": [
@@ -1091,10 +1017,6 @@ spec:
                   {
                     "name": "build-seconds",
                     "value": "{{tasks.build-release-image.outputs.parameters.build-seconds}}"
-                  },
-                  {
-                    "name": "test-build-seconds",
-                    "value": "{{tasks.build-test-target.outputs.parameters.test-build-seconds}}"
                   }
                 ]
               }
@@ -1408,61 +1330,11 @@ spec:
           "command": [
             "sh"
           ],
-          "source": "set -euo pipefail\nrm -rf /workspace/generated/context\nmkdir -p /workspace/generated/context/app /workspace/generated/context/wheelhouse\ncp -a /workspace/source/. /workspace/generated/context/app/\nrm -rf /workspace/generated/context/app/.git /workspace/generated/context/app/tests /workspace/generated/context/app/test\ncp -a /workspace/wheelhouse/. /workspace/generated/context/wheelhouse/\ncp \"/workspace/source/{{inputs.parameters.lock-file-name}}\" /workspace/generated/context/requirements.lock\n\n# Docker 레이어 구조를 WorkflowTemplate JSON의 script.source에서 직접 생성합니다.\ncat > /workspace/generated/context/Dockerfile <<'DOCKERFILE'\n# syntax=docker/dockerfile:1.7\nARG RUNTIME_IMAGE\n\n# Layer 1: 변경 빈도가 낮은 공통 Runtime Base\nFROM ${RUNTIME_IMAGE} AS base\nENV PYTHONDONTWRITEBYTECODE=1 \\\n    PYTHONUNBUFFERED=1 \\\n    PIP_DISABLE_PIP_VERSION_CHECK=1\nWORKDIR /app\n\n# Layer 2: Lock/Wheelhouse를 소스보다 먼저 복사해 의존성 캐시 유지\nFROM base AS dependencies\nCOPY requirements.lock /build/requirements.lock\nCOPY wheelhouse /build/wheelhouse\nRUN python -m pip install \\\n      --no-index \\\n      --find-links=/build/wheelhouse \\\n      --only-binary=:all: \\\n      --prefix=/opt/python-dependencies \\\n      -r /build/requirements.lock \\\n    && rm -rf /root/.cache/pip /build/wheelhouse\n\n# Layer 3: 테스트 전용 계층이며 최종 Release 이미지에는 포함하지 않음\nFROM base AS test\nCOPY --from=dependencies /opt/python-dependencies/ /usr/local/\nCOPY app /app\nRUN python -m compileall -q /app \\\n    && if [ -d /app/tests ]; then python -m pytest -q /app/tests; fi\n\n# Layer 4: 자주 변경되는 애플리케이션 소스를 의존성 다음에 배치\nFROM base AS source-clean\nCOPY app /clean-app\nRUN rm -rf /clean-app/tests /clean-app/test /clean-app/.git \\\n    /clean-app/.pytest_cache /clean-app/.mypy_cache /clean-app/.ruff_cache\n\n# Layer 5: 실행 의존성과 정리된 소스만 포함한 최종 이미지\nFROM base AS release\nCOPY --from=dependencies /opt/python-dependencies/ /usr/local/\nCOPY --from=source-clean /clean-app /app\nUSER 10001:10001\nCMD [\"python\", \"-m\", \"app\"]\nDOCKERFILE\n\nprintf '%s' 'base,dependencies,test,source-clean,release' > /workspace/generated/docker-layer-stages.txt\ncat > /workspace/generated/build-spec.json <<'JSON'\n{\n  \"repositoryName\": \"{{inputs.parameters.repository-name}}\",\n  \"runtimeImage\": \"{{inputs.parameters.runtime-image}}\",\n  \"parentImageDigest\": \"{{inputs.parameters.parent-image-digest}}\",\n  \"lockFileName\": \"{{inputs.parameters.lock-file-name}}\",\n  \"lockHash\": \"{{inputs.parameters.lock-hash}}\",\n  \"imageReference\": \"{{inputs.parameters.image-reference}}\",\n  \"cacheReference\": \"{{inputs.parameters.cache-reference}}\",\n  \"dockerLayerStages\": [\"base\", \"dependencies\", \"test\", \"source-clean\", \"release\"]\n}\nJSON\ntest -s /workspace/generated/context/Dockerfile\ntest -s /workspace/generated/build-spec.json\nprintf 'Docker layers: base -> dependencies -> test -> source-clean -> release\\n'\n",
+          "source": "set -euo pipefail\nrm -rf /workspace/generated/context\nmkdir -p /workspace/generated/context/app /workspace/generated/context/wheelhouse\ncp -a /workspace/source/. /workspace/generated/context/app/\nrm -rf /workspace/generated/context/app/.git\ncp -a /workspace/wheelhouse/. /workspace/generated/context/wheelhouse/\ncp \"/workspace/source/{{inputs.parameters.lock-file-name}}\" /workspace/generated/context/requirements.lock\n\n# Docker 레이어 구조를 WorkflowTemplate JSON의 script.source에서 직접 생성합니다.\ncat > /workspace/generated/context/Dockerfile <<'DOCKERFILE'\n# syntax=docker/dockerfile:1.7\nARG RUNTIME_IMAGE\n\n# Layer 1: 변경 빈도가 낮은 공통 Runtime Base\nFROM ${RUNTIME_IMAGE} AS base\nENV PYTHONDONTWRITEBYTECODE=1 \\\n    PYTHONUNBUFFERED=1 \\\n    PIP_DISABLE_PIP_VERSION_CHECK=1\nWORKDIR /app\n\n# Layer 2: Lock/Wheelhouse를 소스보다 먼저 복사해 의존성 캐시 유지\nFROM base AS dependencies\nCOPY requirements.lock /build/requirements.lock\nCOPY wheelhouse /build/wheelhouse\nRUN python -m pip install \\\n      --no-index \\\n      --find-links=/build/wheelhouse \\\n      --only-binary=:all: \\\n      --prefix=/opt/python-dependencies \\\n      -r /build/requirements.lock \\\n    && rm -rf /root/.cache/pip /build/wheelhouse\n\n# Layer 3: 테스트 전용 계층이며 최종 Release 이미지에는 포함하지 않음\nFROM base AS test\nCOPY --from=dependencies /opt/python-dependencies/ /usr/local/\nCOPY app /app\nRUN python -m compileall -q /app \\\n    && if [ -d /app/tests ]; then python -m pytest -q /app/tests; fi \\\n    && touch /test-passed\n\n# Layer 4: 자주 변경되는 애플리케이션 소스를 의존성 다음에 배치\nFROM base AS source-clean\nCOPY app /clean-app\nRUN rm -rf /clean-app/tests /clean-app/test /clean-app/.git \\\n    /clean-app/.pytest_cache /clean-app/.mypy_cache /clean-app/.ruff_cache\n\n# Layer 5: 실행 의존성과 정리된 소스만 포함한 최종 이미지\nFROM base AS release\n# Test Stage 성공 표식을 복사하여 Release 빌드가 Test 실행을 강제로 의존\nCOPY --from=test /test-passed /tmp/test-passed\nCOPY --from=dependencies /opt/python-dependencies/ /usr/local/\nCOPY --from=source-clean /clean-app /app\nRUN rm -f /tmp/test-passed\nUSER 10001:10001\nCMD [\"python\", \"-m\", \"app\"]\nDOCKERFILE\n\nprintf '%s' 'base,dependencies,test,source-clean,release' > /workspace/generated/docker-layer-stages.txt\ncat > /workspace/generated/build-spec.json <<'JSON'\n{\n  \"repositoryName\": \"{{inputs.parameters.repository-name}}\",\n  \"runtimeImage\": \"{{inputs.parameters.runtime-image}}\",\n  \"parentImageDigest\": \"{{inputs.parameters.parent-image-digest}}\",\n  \"lockFileName\": \"{{inputs.parameters.lock-file-name}}\",\n  \"lockHash\": \"{{inputs.parameters.lock-hash}}\",\n  \"imageReference\": \"{{inputs.parameters.image-reference}}\",\n  \"cacheReference\": \"{{inputs.parameters.cache-reference}}\",\n  \"dockerLayerStages\": [\"base\", \"dependencies\", \"test\", \"source-clean\", \"release\"]\n}\nJSON\ntest -s /workspace/generated/context/Dockerfile\ntest -s /workspace/generated/build-spec.json\nprintf 'Docker layers: base -> dependencies -> test -> source-clean -> release\\n'\n",
           "volumeMounts": [
             {
               "name": "workspace",
               "mountPath": "/workspace"
-            }
-          ]
-        }
-      },
-      {
-        "name": "build-test-target",
-        "inputs": {
-          "parameters": [
-            {
-              "name": "buildkit-address"
-            },
-            {
-              "name": "runtime-image"
-            },
-            {
-              "name": "cache-reference"
-            }
-          ]
-        },
-        "script": {
-          "image": "harbor.CHANGE_ME.internal/platform/buildkit-client-tools:1.0.0@sha256:0000000000000000000000000000000000000000000000000000000000000000",
-          "command": [
-            "sh"
-          ],
-          "env": [
-            {
-              "name": "DOCKER_CONFIG",
-              "value": "/root/.docker"
-            }
-          ],
-          "source": "set -euo pipefail\nmkdir -p /workspace/generated\nstart=\"$(date +%s)\"\nprintf '[BuildKit] test build started at %s\\n' \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"\nbuildctl --addr \"{{inputs.parameters.buildkit-address}}\" build \\\n  --progress=plain \\\n  --frontend dockerfile.v0 \\\n  --local context=/workspace/generated/context \\\n  --local dockerfile=/workspace/generated/context \\\n  --opt filename=Dockerfile \\\n  --opt target=test \\\n  --opt \"build-arg:RUNTIME_IMAGE={{inputs.parameters.runtime-image}}\" \\\n  --import-cache \"type=registry,ref={{inputs.parameters.cache-reference}}\" \\\n  --output type=cacheonly\nend=\"$(date +%s)\"\nprintf '%s' \"$((end - start))\" > /workspace/generated/test-build-seconds.txt\nprintf '[BuildKit] test build completed in %s seconds\\n' \"$((end - start))\"\n",
-          "volumeMounts": [
-            {
-              "name": "workspace",
-              "mountPath": "/workspace"
-            },
-            {
-              "name": "registry-auth",
-              "mountPath": "/root/.docker",
-              "readOnly": true
-            }
-          ]
-        },
-        "outputs": {
-          "parameters": [
-            {
-              "name": "test-build-seconds",
-              "valueFrom": {
-                "path": "/workspace/generated/test-build-seconds.txt"
-              }
             }
           ]
         }
@@ -1610,9 +1482,6 @@ spec:
             },
             {
               "name": "build-seconds"
-            },
-            {
-              "name": "test-build-seconds"
             }
           ]
         },
@@ -1641,7 +1510,7 @@ spec:
           "command": [
             "sh"
           ],
-          "source": "set -euo pipefail\nmkdir -p /workspace/output\njq -n \\\n  --arg workflowName \"{{workflow.name}}\" \\\n  --arg workflowUid \"{{workflow.uid}}\" \\\n  --arg namespace \"{{workflow.namespace}}\" \\\n  --arg repositoryName \"{{inputs.parameters.repository-name}}\" \\\n  --arg imageReference \"{{inputs.parameters.image-reference}}\" \\\n  --arg imageDigest \"{{inputs.parameters.image-digest}}\" \\\n  --arg parentImageDigest \"{{inputs.parameters.parent-image-digest}}\" \\\n  --arg runtimeImage \"{{inputs.parameters.runtime-image}}\" \\\n  --arg lockFileName \"{{inputs.parameters.lock-file-name}}\" \\\n  --arg lockHash \"{{inputs.parameters.lock-hash}}\" \\\n  --argjson wheelCount \"{{inputs.parameters.wheel-count}}\" \\\n  --argjson wheelTotalBytes \"{{inputs.parameters.wheel-total-bytes}}\" \\\n  --argjson wheelDownloadSeconds \"{{inputs.parameters.wheel-download-seconds}}\" \\\n  --argjson averageDownloadBytesPerSecond \"{{inputs.parameters.average-download-bytes-per-second}}\" \\\n  --argjson nexusBeforeDownloadTotalSeconds \"{{inputs.parameters.nexus-before-download-total-seconds}}\" \\\n  --argjson nexusAfterDownloadTotalSeconds \"{{inputs.parameters.nexus-after-download-total-seconds}}\" \\\n  --argjson testBuildSeconds \"{{inputs.parameters.test-build-seconds}}\" \\\n  --argjson buildSeconds \"{{inputs.parameters.build-seconds}}\" \\\n  --arg timestamp \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\" \\\n  '{workflowName:$workflowName,workflowUid:$workflowUid,namespace:$namespace,repositoryName:$repositoryName,imageReference:$imageReference,imageDigest:$imageDigest,parentImageDigest:$parentImageDigest,runtimeImage:$runtimeImage,lockFileName:$lockFileName,lockHash:$lockHash,wheelCount:$wheelCount,wheelTotalBytes:$wheelTotalBytes,wheelDownloadSeconds:$wheelDownloadSeconds,averageDownloadBytesPerSecond:$averageDownloadBytesPerSecond,nexusBeforeDownloadTotalSeconds:$nexusBeforeDownloadTotalSeconds,nexusAfterDownloadTotalSeconds:$nexusAfterDownloadTotalSeconds,testBuildSeconds:$testBuildSeconds,buildSeconds:$buildSeconds,packageRepository:\"nexus\",wheelOnly:true,status:\"SUCCEEDED\",timestamp:$timestamp}' \\\n  > /workspace/output/build-report.json\njq . /workspace/output/build-report.json\n",
+          "source": "set -euo pipefail\nmkdir -p /workspace/output\njq -n \\\n  --arg workflowName \"{{workflow.name}}\" \\\n  --arg workflowUid \"{{workflow.uid}}\" \\\n  --arg namespace \"{{workflow.namespace}}\" \\\n  --arg repositoryName \"{{inputs.parameters.repository-name}}\" \\\n  --arg imageReference \"{{inputs.parameters.image-reference}}\" \\\n  --arg imageDigest \"{{inputs.parameters.image-digest}}\" \\\n  --arg parentImageDigest \"{{inputs.parameters.parent-image-digest}}\" \\\n  --arg runtimeImage \"{{inputs.parameters.runtime-image}}\" \\\n  --arg lockFileName \"{{inputs.parameters.lock-file-name}}\" \\\n  --arg lockHash \"{{inputs.parameters.lock-hash}}\" \\\n  --argjson wheelCount \"{{inputs.parameters.wheel-count}}\" \\\n  --argjson wheelTotalBytes \"{{inputs.parameters.wheel-total-bytes}}\" \\\n  --argjson wheelDownloadSeconds \"{{inputs.parameters.wheel-download-seconds}}\" \\\n  --argjson averageDownloadBytesPerSecond \"{{inputs.parameters.average-download-bytes-per-second}}\" \\\n  --argjson nexusBeforeDownloadTotalSeconds \"{{inputs.parameters.nexus-before-download-total-seconds}}\" \\\n  --argjson nexusAfterDownloadTotalSeconds \"{{inputs.parameters.nexus-after-download-total-seconds}}\" \\\n  --argjson buildSeconds \"{{inputs.parameters.build-seconds}}\" \\\n  --arg timestamp \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\" \\\n  '{workflowName:$workflowName,workflowUid:$workflowUid,namespace:$namespace,repositoryName:$repositoryName,imageReference:$imageReference,imageDigest:$imageDigest,parentImageDigest:$parentImageDigest,runtimeImage:$runtimeImage,lockFileName:$lockFileName,lockHash:$lockHash,wheelCount:$wheelCount,wheelTotalBytes:$wheelTotalBytes,wheelDownloadSeconds:$wheelDownloadSeconds,averageDownloadBytesPerSecond:$averageDownloadBytesPerSecond,nexusBeforeDownloadTotalSeconds:$nexusBeforeDownloadTotalSeconds,nexusAfterDownloadTotalSeconds:$nexusAfterDownloadTotalSeconds,testIncludedInReleaseBuild:true,buildSeconds:$buildSeconds,packageRepository:\"nexus\",wheelOnly:true,status:\"SUCCEEDED\",timestamp:$timestamp}' \\\n  > /workspace/output/build-report.json\njq . /workspace/output/build-report.json\n",
           "volumeMounts": [
             {
               "name": "workspace",
@@ -1776,7 +1645,7 @@ data:
 PVC와 Registry Cache의 수명과 목적을 분리했다.
 
 - `workspace` PVC: 현재 Workflow의 `/workspace/source`, `/workspace/wheelhouse`, `/workspace/generated`, `/workspace/output`을 Pod 사이에서 공유한다. Workflow가 삭제되면 PVC도 Workflow 소유권에 따라 정리되는 전용 작업 공간이다.
-- Harbor Registry Cache: 두 빌드 모두 Registry Cache를 Import하지만 Test 빌드에서는 Cache를 Push하지 않는다. Release 빌드에서만 `--export-cache type=registry,ref=...,mode=min`으로 최종 이미지에 필요한 레이어를 갱신해 중복 전송을 줄인다.
+- Harbor Registry Cache: 단일 Release Build에서 Registry Cache를 Import하고 `--export-cache type=registry,ref=...,mode=min`으로 최종 이미지에 필요한 레이어만 갱신한다. Release Stage가 Test Stage의 성공 표식을 의존하므로 별도의 Test BuildKit 호출 없이 테스트가 강제된다.
 - Harbor Application Repository: `harbor.CHANGE_ME.internal/applications/<repository>:<tag>`에 `release` Target만 Push한다. 배포와 기록에는 BuildKit metadata에서 얻은 Digest를 함께 사용한다.
 
 Cache Repository에는 애플리케이션 배포 보존 정책과 다른 정리 정책을 적용해야 한다. 여러 빌드가 같은 `:buildcache` Tag를 동시에 갱신할 수 있으므로, 충돌이 문제라면 브랜치/플랫폼별 Cache Tag를 추가한다.
@@ -1792,7 +1661,7 @@ report-nexus-connectivity ──────────────────
                                                                                               │
 validate-runtime-image ───────────────────────────────────────────────────────────────────────┤
                                                                                               ↓
-prepare-build-context → build-test-target → build-release-image → parse-image-digest
+prepare-build-context → build-release-image(test 포함) → parse-image-digest
     → generate-build-report → notify-build-result
 ```
 
@@ -1865,7 +1734,7 @@ python3 -m py_compile build-tools/scripts/*.py
 ## 14. 운영상 한계와 주의사항
 
 - Argo Controller가 Output Artifact를 저장하려면 Namespace/Controller에 Artifact Repository가 구성되어 있어야 한다. 파일은 PVC에도 남지만 Artifact 업로드 설정이 없으면 Artifact Output 단계가 실패할 수 있다.
-- Test Build 시간은 `testBuildSeconds`로 별도 기록한다. Release의 `buildSeconds`는 Build·Cache Export·Harbor Push를 포함한 전체 시간이며 `push-seconds`는 호환성을 위해 `0`이다. 정확한 Push 시간 분리가 필요하면 Registry 이벤트/Telemetry를 결합해야 한다.
+- `buildSeconds`는 Test Stage·Release Stage·Cache Export·Harbor Push를 포함한 단일 BuildKit 호출의 전체 시간이며 `push-seconds`는 호환성을 위해 `0`이다. 정확한 Push 시간 분리가 필요하면 Registry 이벤트/Telemetry를 결합해야 한다.
 - 원격 BuildKit이 TLS/mTLS를 요구하면 BuildKit 인증용 Secret Volume과 `buildctl --tlscacert/--tlscert/--tlskey`를 추가해야 한다. 현재 요구사항에 그 Secret이 정의되지 않아 주소 및 사내 CA 신뢰가 Client Image에 준비됐다는 전제다.
 - `ReadWriteMany` StorageClass가 클러스터에 실제로 있어야 한다. NFS 계열 Storage에서는 소유권/성능/파일 잠금 정책도 확인한다.
 - Secret 예시는 배포 구조를 보여주기 위한 자리표시자다. 실제 값은 Git에 저장하지 말고 External Secrets/Sealed Secrets/Vault 같은 운영 Secret 관리 경로로 주입한다.
