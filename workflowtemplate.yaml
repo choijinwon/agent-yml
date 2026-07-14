@@ -107,8 +107,7 @@ spec:
           - name: phase
             value: after-download
       - name: prepare-build-context
-        depends: validate-runtime-image.Succeeded && verify-wheelhouse.Succeeded &&
-          report-nexus-after-download.Succeeded
+        depends: validate-runtime-image.Succeeded && verify-wheelhouse.Succeeded
         template: prepare-build-context
         arguments:
           parameters:
@@ -158,7 +157,7 @@ spec:
           - name: image-digest
             value: "{{tasks.build-release-image.outputs.parameters.image-digest}}"
       - name: generate-build-report
-        depends: parse-image-digest.Succeeded
+        depends: parse-image-digest.Succeeded && report-nexus-after-download.Succeeded
         template: generate-build-report
         arguments:
           parameters:
@@ -190,6 +189,8 @@ spec:
             value: "{{tasks.report-nexus-after-download.outputs.parameters.total-seconds}}"
           - name: build-seconds
             value: "{{tasks.build-release-image.outputs.parameters.build-seconds}}"
+          - name: test-build-seconds
+            value: "{{tasks.build-test-target.outputs.parameters.test-build-seconds}}"
       - name: notify-build-result
         depends: generate-build-report.Succeeded
         template: notify-build-result
@@ -536,7 +537,11 @@ spec:
         value: "/root/.docker"
       source: |
         set -euo pipefail
+        mkdir -p /workspace/generated
+        start="$(date +%s)"
+        printf '[BuildKit] test build started at %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
         buildctl --addr "{{inputs.parameters.buildkit-address}}" build \
+          --progress=plain \
           --frontend dockerfile.v0 \
           --local context=/workspace/generated/context \
           --local dockerfile=/workspace/generated/context \
@@ -544,14 +549,21 @@ spec:
           --opt target=test \
           --opt "build-arg:RUNTIME_IMAGE={{inputs.parameters.runtime-image}}" \
           --import-cache "type=registry,ref={{inputs.parameters.cache-reference}}" \
-          --export-cache "type=registry,ref={{inputs.parameters.cache-reference}},mode=max" \
           --output type=cacheonly
+        end="$(date +%s)"
+        printf '%s' "$((end - start))" > /workspace/generated/test-build-seconds.txt
+        printf '[BuildKit] test build completed in %s seconds\n' "$((end - start))"
       volumeMounts:
       - name: workspace
         mountPath: "/workspace"
       - name: registry-auth
         mountPath: "/root/.docker"
         readOnly: true
+    outputs:
+      parameters:
+      - name: test-build-seconds
+        valueFrom:
+          path: "/workspace/generated/test-build-seconds.txt"
   - name: build-release-image
     inputs:
       parameters:
@@ -584,7 +596,9 @@ spec:
         set -euo pipefail
         mkdir -p /workspace/generated
         start="$(date +%s)"
+        printf '[BuildKit] release build and Harbor push started at %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
         buildctl --addr "{{inputs.parameters.buildkit-address}}" build \
+          --progress=plain \
           --frontend dockerfile.v0 \
           --local context=/workspace/generated/context \
           --local dockerfile=/workspace/generated/context \
@@ -592,7 +606,7 @@ spec:
           --opt target=release \
           --opt "build-arg:RUNTIME_IMAGE={{inputs.parameters.runtime-image}}" \
           --import-cache "type=registry,ref={{inputs.parameters.cache-reference}}" \
-          --export-cache "type=registry,ref={{inputs.parameters.cache-reference}},mode=max" \
+          --export-cache "type=registry,ref={{inputs.parameters.cache-reference}},mode=min" \
           --output "type=image,name={{inputs.parameters.image-reference}},push=true" \
           --metadata-file /workspace/generated/build-metadata.json
         end="$(date +%s)"
@@ -602,7 +616,8 @@ spec:
         printf '%s' "$digest" > /workspace/generated/image-digest.txt
         printf '%s' "$((end - start))" > /workspace/generated/build-seconds.txt
         printf '%s' '0' > /workspace/generated/push-seconds.txt
-        printf 'pushed %s@%s\n' "{{inputs.parameters.image-reference}}" "$digest"
+        printf '[BuildKit] release build, cache export and Harbor push completed in %s seconds: %s@%s\n' \
+          "$((end - start))" "{{inputs.parameters.image-reference}}" "$digest"
       volumeMounts:
       - name: workspace
         mountPath: "/workspace"
@@ -644,6 +659,7 @@ spec:
       - name: nexus-before-download-total-seconds
       - name: nexus-after-download-total-seconds
       - name: build-seconds
+      - name: test-build-seconds
     outputs:
       parameters:
       - name: report-json
@@ -678,9 +694,10 @@ spec:
           --argjson averageDownloadBytesPerSecond "{{inputs.parameters.average-download-bytes-per-second}}" \
           --argjson nexusBeforeDownloadTotalSeconds "{{inputs.parameters.nexus-before-download-total-seconds}}" \
           --argjson nexusAfterDownloadTotalSeconds "{{inputs.parameters.nexus-after-download-total-seconds}}" \
+          --argjson testBuildSeconds "{{inputs.parameters.test-build-seconds}}" \
           --argjson buildSeconds "{{inputs.parameters.build-seconds}}" \
           --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-          '{workflowName:$workflowName,workflowUid:$workflowUid,namespace:$namespace,repositoryName:$repositoryName,imageReference:$imageReference,imageDigest:$imageDigest,parentImageDigest:$parentImageDigest,runtimeImage:$runtimeImage,lockFileName:$lockFileName,lockHash:$lockHash,wheelCount:$wheelCount,wheelTotalBytes:$wheelTotalBytes,wheelDownloadSeconds:$wheelDownloadSeconds,averageDownloadBytesPerSecond:$averageDownloadBytesPerSecond,nexusBeforeDownloadTotalSeconds:$nexusBeforeDownloadTotalSeconds,nexusAfterDownloadTotalSeconds:$nexusAfterDownloadTotalSeconds,buildSeconds:$buildSeconds,packageRepository:"nexus",wheelOnly:true,status:"SUCCEEDED",timestamp:$timestamp}' \
+          '{workflowName:$workflowName,workflowUid:$workflowUid,namespace:$namespace,repositoryName:$repositoryName,imageReference:$imageReference,imageDigest:$imageDigest,parentImageDigest:$parentImageDigest,runtimeImage:$runtimeImage,lockFileName:$lockFileName,lockHash:$lockHash,wheelCount:$wheelCount,wheelTotalBytes:$wheelTotalBytes,wheelDownloadSeconds:$wheelDownloadSeconds,averageDownloadBytesPerSecond:$averageDownloadBytesPerSecond,nexusBeforeDownloadTotalSeconds:$nexusBeforeDownloadTotalSeconds,nexusAfterDownloadTotalSeconds:$nexusAfterDownloadTotalSeconds,testBuildSeconds:$testBuildSeconds,buildSeconds:$buildSeconds,packageRepository:"nexus",wheelOnly:true,status:"SUCCEEDED",timestamp:$timestamp}' \
           > /workspace/output/build-report.json
         jq . /workspace/output/build-report.json
       volumeMounts:
