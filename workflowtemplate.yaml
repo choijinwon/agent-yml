@@ -424,9 +424,6 @@ spec:
         if [ '{{inputs.parameters.dependency-cache-status}}' = MISS ]; then
           find "$context/wheelhouse" -type f -name '*.whl' -print -quit | grep -q . || { echo 'wheelhouse is empty on cache MISS' >&2; exit 1; }
         fi
-        if [ '{{inputs.parameters.dependency-cache-status}}' = MISS ]; then
-          find "$context/wheelhouse" -type f -name '*.whl' -print -quit | grep -q . || { echo 'wheelhouse is empty on cache MISS' >&2; exit 1; }
-        fi
         rm -rf "$context/app/.git"
         cp "$context/app/{{inputs.parameters.lock-file-name}}" "$context/requirements.lock"
 
@@ -556,7 +553,6 @@ spec:
           --opt filename=Dockerfile \
           --opt target=release \
           --opt "build-arg:RUNTIME_IMAGE={{inputs.parameters.runtime-image}}" \
-          --opt "build-arg:DEPENDENCY_IMAGE={{inputs.parameters.dependency-image}}" \
           --opt "build-arg:DEPENDENCY_IMAGE={{inputs.parameters.dependency-image}}" \
           --import-cache "type=registry,ref={{inputs.parameters.cache-reference}}" \
           --export-cache "type=registry,ref={{inputs.parameters.cache-reference}},mode=min" \
