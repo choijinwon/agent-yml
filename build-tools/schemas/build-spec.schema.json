@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "additionalProperties": false,
+  "additionalProperties": true,
   "required": [
     "repositoryName",
     "runtimeImage",
@@ -14,6 +14,87 @@
   "properties": {
     "repositoryName": {"type": "string", "minLength": 1},
     "runtimeImage": {"type": "string", "minLength": 1},
+    "runtimeLineage": {"type": "string", "minLength": 1},
+    "imageBuilderMode": {"const": "declarative-spec"},
+    "imageBuilderCategory": {"type": "string", "minLength": 1},
+    "imageBuilderSpecFile": {"type": "string", "minLength": 1},
+    "dockerfileStrategy": {"const": "multi-stage-target"},
+    "multiStageTargetStrategy": {
+      "type": "object",
+      "required": ["stages", "targets", "releaseTarget", "pushOnlyReleaseTarget", "releaseRequiresTestStage"],
+      "properties": {
+        "stages": {
+          "type": "array",
+          "items": {"type": "string"},
+          "contains": {"const": "release"}
+        },
+        "targets": {
+          "type": "object",
+          "required": ["dependency", "test", "release"],
+          "properties": {
+            "dependency": {"const": "dependency-image"},
+            "test": {"const": "test"},
+            "release": {"const": "release"}
+          }
+        },
+        "releaseTarget": {"const": "release"},
+        "pushOnlyReleaseTarget": {"const": true},
+        "releaseRequiresTestStage": {"const": true}
+      }
+    },
+    "declarativeImageBuilder": {
+      "type": "object",
+      "required": ["managedBy", "manualDockerfilePerProject", "category", "specFile"],
+      "properties": {
+        "managedBy": {"const": "central-image-builder-spec"},
+        "manualDockerfilePerProject": {"const": false},
+        "category": {"type": "string", "minLength": 1},
+        "specFile": {"type": "string", "minLength": 1}
+      }
+    },
+    "trainingServingPattern": {"enum": ["strict", "optimized"]},
+    "inferenceServerRuntime": {"enum": ["python-runtime", "triton", "tensorrt", "vllm", "onnxruntime", "custom"]},
+    "artifactContractFile": {"type": "string", "minLength": 1},
+    "modelArtifactPolicy": {"const": "external"},
+    "modelArtifactReference": {"type": "string"},
+    "modelImagePolicy": {
+      "type": "object",
+      "properties": {
+        "default": {"const": "external"},
+        "embedModelFilesByDefault": {"const": false},
+        "excludeModelDirectoriesFromBuildContext": {"const": true},
+        "runtimeInjection": {"type": "string"}
+      }
+    },
+    "securityReproducibilityPolicy": {
+      "type": "object",
+      "required": [
+        "required",
+        "runtimeDigestPinned",
+        "dependencyDigestPinned",
+        "lockHashRequired",
+        "noLatestTags",
+        "nonRootUserRequired",
+        "modelExternalByDefault",
+        "buildReportRequired",
+        "reproducibilityKey"
+      ],
+      "properties": {
+        "required": {"const": true},
+        "runtimeDigestPinned": {"const": true},
+        "dependencyDigestPinned": {"const": true},
+        "lockHashRequired": {"const": true},
+        "noLatestTags": {"const": true},
+        "nonRootUserRequired": {"const": true},
+        "modelExternalByDefault": {"const": true},
+        "buildReportRequired": {"const": true},
+        "reproducibilityKey": {"const": "runtimeDigest+lockHash+pythonAbi+targetPlatform+builderSpec"}
+      }
+    },
+    "securityReproducibilityChecks": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
     "parentImageDigest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
     "lockFileName": {"enum": ["requirements.lock", "requirements.txt"]},
     "lockHash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},

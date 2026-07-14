@@ -15,6 +15,8 @@ spec:
       value: git@bitbucket.CHANGE_ME.internal:project/sample-api.git
     - name: runtime-image
       value: harbor.CHANGE_ME.internal/runtime/python311@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    - name: runtime-lineage
+      value: python311-cpu
     - name: nexus-pypi-url
       value: https://nexus.CHANGE_ME.internal/simple
     - name: registry-address
@@ -33,6 +35,22 @@ spec:
       value: cp311
     - name: target-platform
       value: linux-amd64
+    - name: workload-role
+      value: serve
+    - name: training-serving-pattern
+      value: strict
+    - name: inference-server-runtime
+      value: python-runtime
+    - name: artifact-contract-file
+      value: artifact-contract.json
+    - name: model-artifact-policy
+      value: external
+    - name: model-artifact-reference
+      value: ''
+    - name: image-builder-category
+      value: ai-ml-python
+    - name: image-builder-spec-file
+      value: image-builder.spec.json
     - name: force-rebuild-dependencies
       value: 'false'
   volumeClaimTemplates:
@@ -116,6 +134,8 @@ spec:
             value: "{{tasks.get-repository-name-from-git.outputs.parameters.repository-name}}"
           - name: runtime-image
             value: "{{tasks.validate-runtime-image.outputs.parameters.runtime-image}}"
+          - name: runtime-lineage
+            value: "{{workflow.parameters.runtime-lineage}}"
           - name: parent-image-digest
             value: "{{tasks.validate-runtime-image.outputs.parameters.parent-image-digest}}"
           - name: lock-file-name
@@ -123,11 +143,27 @@ spec:
           - name: lock-hash
             value: "{{tasks.validate-lock.outputs.parameters.lock-hash}}"
           - name: image-reference
-            value: "{{workflow.parameters.registry-address}}/{{workflow.parameters.registry-project}}/{{tasks.get-repository-name-from-git.outputs.parameters.repository-name}}:{{workflow.parameters.image-tag}}"
+            value: "{{workflow.parameters.registry-address}}/{{workflow.parameters.registry-project}}/{{workflow.parameters.runtime-lineage}}/{{workflow.parameters.workload-role}}/{{tasks.get-repository-name-from-git.outputs.parameters.repository-name}}:{{workflow.parameters.image-tag}}"
           - name: cache-reference
-            value: "{{workflow.parameters.cache-registry-address}}/{{tasks.get-repository-name-from-git.outputs.parameters.repository-name}}:buildcache"
+            value: "{{workflow.parameters.cache-registry-address}}/{{workflow.parameters.runtime-lineage}}/{{workflow.parameters.workload-role}}/{{tasks.get-repository-name-from-git.outputs.parameters.repository-name}}:buildcache"
           - name: dependency-cache-status
             value: "{{tasks.check-dependency-image.outputs.parameters.cache-status}}"
+          - name: workload-role
+            value: "{{workflow.parameters.workload-role}}"
+          - name: training-serving-pattern
+            value: "{{workflow.parameters.training-serving-pattern}}"
+          - name: inference-server-runtime
+            value: "{{workflow.parameters.inference-server-runtime}}"
+          - name: artifact-contract-file
+            value: "{{workflow.parameters.artifact-contract-file}}"
+          - name: model-artifact-policy
+            value: "{{workflow.parameters.model-artifact-policy}}"
+          - name: model-artifact-reference
+            value: "{{workflow.parameters.model-artifact-reference}}"
+          - name: image-builder-category
+            value: "{{workflow.parameters.image-builder-category}}"
+          - name: image-builder-spec-file
+            value: "{{workflow.parameters.image-builder-spec-file}}"
       - name: build-dependency-image
         depends: prepare-build-context.Succeeded
         template: build-dependency-image
@@ -156,12 +192,30 @@ spec:
             value: "{{workflow.parameters.buildkit-address}}"
           - name: runtime-image
             value: "{{tasks.validate-runtime-image.outputs.parameters.runtime-image}}"
+          - name: runtime-lineage
+            value: "{{workflow.parameters.runtime-lineage}}"
           - name: image-reference
-            value: "{{workflow.parameters.registry-address}}/{{workflow.parameters.registry-project}}/{{tasks.get-repository-name-from-git.outputs.parameters.repository-name}}:{{workflow.parameters.image-tag}}"
+            value: "{{workflow.parameters.registry-address}}/{{workflow.parameters.registry-project}}/{{workflow.parameters.runtime-lineage}}/{{workflow.parameters.workload-role}}/{{tasks.get-repository-name-from-git.outputs.parameters.repository-name}}:{{workflow.parameters.image-tag}}"
           - name: cache-reference
-            value: "{{workflow.parameters.cache-registry-address}}/{{tasks.get-repository-name-from-git.outputs.parameters.repository-name}}:buildcache"
+            value: "{{workflow.parameters.cache-registry-address}}/{{workflow.parameters.runtime-lineage}}/{{workflow.parameters.workload-role}}/{{tasks.get-repository-name-from-git.outputs.parameters.repository-name}}:buildcache"
           - name: dependency-image
             value: "{{tasks.build-dependency-image.outputs.parameters.dependency-image-reference}}"
+          - name: workload-role
+            value: "{{workflow.parameters.workload-role}}"
+          - name: training-serving-pattern
+            value: "{{workflow.parameters.training-serving-pattern}}"
+          - name: inference-server-runtime
+            value: "{{workflow.parameters.inference-server-runtime}}"
+          - name: artifact-contract-file
+            value: "{{workflow.parameters.artifact-contract-file}}"
+          - name: model-artifact-policy
+            value: "{{workflow.parameters.model-artifact-policy}}"
+          - name: model-artifact-reference
+            value: "{{workflow.parameters.model-artifact-reference}}"
+          - name: image-builder-category
+            value: "{{workflow.parameters.image-builder-category}}"
+          - name: image-builder-spec-file
+            value: "{{workflow.parameters.image-builder-spec-file}}"
       - name: parse-image-digest
         depends: build-release-image.Succeeded
         template: parse-image-digest
@@ -184,6 +238,24 @@ spec:
             value: "{{tasks.validate-runtime-image.outputs.parameters.parent-image-digest}}"
           - name: runtime-image
             value: "{{tasks.validate-runtime-image.outputs.parameters.runtime-image}}"
+          - name: runtime-lineage
+            value: "{{workflow.parameters.runtime-lineage}}"
+          - name: workload-role
+            value: "{{workflow.parameters.workload-role}}"
+          - name: training-serving-pattern
+            value: "{{workflow.parameters.training-serving-pattern}}"
+          - name: inference-server-runtime
+            value: "{{workflow.parameters.inference-server-runtime}}"
+          - name: artifact-contract-file
+            value: "{{workflow.parameters.artifact-contract-file}}"
+          - name: model-artifact-policy
+            value: "{{workflow.parameters.model-artifact-policy}}"
+          - name: model-artifact-reference
+            value: "{{workflow.parameters.model-artifact-reference}}"
+          - name: image-builder-category
+            value: "{{workflow.parameters.image-builder-category}}"
+          - name: image-builder-spec-file
+            value: "{{workflow.parameters.image-builder-spec-file}}"
           - name: lock-file-name
             value: "{{tasks.validate-lock.outputs.parameters.lock-file-name}}"
           - name: lock-hash
@@ -406,6 +478,15 @@ spec:
       parameters:
       - name: repository-name
       - name: runtime-image
+      - name: runtime-lineage
+      - name: workload-role
+      - name: training-serving-pattern
+      - name: inference-server-runtime
+      - name: artifact-contract-file
+      - name: model-artifact-policy
+      - name: model-artifact-reference
+      - name: image-builder-category
+      - name: image-builder-spec-file
       - name: parent-image-digest
       - name: lock-file-name
       - name: lock-hash
@@ -421,6 +502,41 @@ spec:
         context=/workspace/generated/context
         test -d "$context/app"
         test -d "$context/wheelhouse"
+        workload_role='{{inputs.parameters.workload-role}}'
+        runtime_lineage='{{inputs.parameters.runtime-lineage}}'
+        training_serving_pattern='{{inputs.parameters.training-serving-pattern}}'
+        inference_server_runtime='{{inputs.parameters.inference-server-runtime}}'
+        artifact_contract_file='{{inputs.parameters.artifact-contract-file}}'
+        model_artifact_policy='{{inputs.parameters.model-artifact-policy}}'
+        model_artifact_reference='{{inputs.parameters.model-artifact-reference}}'
+        image_builder_category='{{inputs.parameters.image-builder-category}}'
+        image_builder_spec_file='{{inputs.parameters.image-builder-spec-file}}'
+        case "$workload_role" in
+          train|job|serve|infer) ;;
+          *) echo "workload-role must be one of train, job, serve, infer" >&2; exit 1 ;;
+        esac
+        printf '%s' "$runtime_lineage" | grep -Eq '^[a-z0-9][a-z0-9._-]*$' || { echo 'runtime-lineage must use lowercase registry-safe characters' >&2; exit 1; }
+        printf '%s' "$image_builder_category" | grep -Eq '^[a-z0-9][a-z0-9._-]*$' || { echo 'image-builder-category must use lowercase registry-safe characters' >&2; exit 1; }
+        printf '%s' "$image_builder_spec_file" | grep -Eq '^[A-Za-z0-9._-]+$' || { echo 'image-builder-spec-file must be a file name, not a path' >&2; exit 1; }
+        case "$training_serving_pattern" in
+          strict|optimized) ;;
+          *) echo 'training-serving-pattern must be strict or optimized' >&2; exit 1 ;;
+        esac
+        case "$inference_server_runtime" in
+          python-runtime|triton|tensorrt|vllm|onnxruntime|custom) ;;
+          *) echo 'inference-server-runtime must be python-runtime, triton, tensorrt, vllm, onnxruntime, or custom' >&2; exit 1 ;;
+        esac
+        case "$model_artifact_policy" in
+          external) ;;
+          *) echo 'model-artifact-policy must be external in this template; model files are not embedded in images by default' >&2; exit 1 ;;
+        esac
+        if [ "$model_artifact_policy" = external ] && [ -z "$model_artifact_reference" ]; then
+          printf '[Model] model-artifact-policy=external: model files are excluded from image and should be mounted or resolved by deployment runtime.\n'
+        fi
+        if [ "$training_serving_pattern" = optimized ]; then
+          case "$workload_role" in serve|infer) ;; *) echo 'optimized pattern is only valid for serve or infer workloads' >&2; exit 1 ;; esac
+          test -s "$context/app/$artifact_contract_file" || { echo "optimized inference requires artifact contract file: $artifact_contract_file" >&2; exit 1; }
+        fi
         if [ '{{inputs.parameters.dependency-cache-status}}' = MISS ]; then
           find "$context/wheelhouse" -type f -name '*.whl' -print -quit | grep -q . || { echo 'wheelhouse is empty on cache MISS' >&2; exit 1; }
         fi
@@ -441,6 +557,10 @@ spec:
         **/node_modules
         app/requirements.lock
         app/requirements.txt
+        # 모델은 기본적으로 이미지와 Build Context에 넣지 않는다. 배포 Runtime에서 PVC/Object Storage/Model Registry로 주입한다.
+        app/model
+        app/models
+        app/model-artifacts
         DOCKERIGNORE
 
         # Docker 레이어 구조를 WorkflowTemplate JSON의 script.source에서 직접 생성합니다.
@@ -448,9 +568,27 @@ spec:
         # syntax=docker/dockerfile:1.7
         ARG RUNTIME_IMAGE
         ARG DEPENDENCY_IMAGE
+        ARG WORKLOAD_ROLE
+        ARG TRAINING_SERVING_PATTERN
+        ARG INFERENCE_SERVER_RUNTIME
+        ARG ARTIFACT_CONTRACT_FILE
+        ARG MODEL_ARTIFACT_POLICY
+        ARG MODEL_ARTIFACT_REFERENCE
+        ARG IMAGE_BUILDER_CATEGORY
+        ARG IMAGE_BUILDER_SPEC_FILE
+
+        # Runtime Contract는 OS Base, Accelerator ABI, Language Runtime, ML Framework, ML Ops Common을 digest로 고정한 공통 계약이다.
+        FROM ${RUNTIME_IMAGE} AS runtime-contract
+        LABEL org.opencontainers.image.runtime-contract.layers="L0-source-base,L1-os-foundation,L2-accelerator-abi,L3-language-runtime,L4-ml-framework,L5-ml-ops-common" \
+              org.opencontainers.image.layer.L0="source-base:digest-pin-required" \
+              org.opencontainers.image.layer.L1="os-foundation" \
+              org.opencontainers.image.layer.L2="accelerator-abi" \
+              org.opencontainers.image.layer.L3="language-runtime" \
+              org.opencontainers.image.layer.L4="ml-framework" \
+              org.opencontainers.image.layer.L5="ml-ops-common"
 
         # Cache MISS에서만 실행해 Lock Hash 전용 Dependency Image를 생성
-        FROM ${RUNTIME_IMAGE} AS dependency-image
+        FROM runtime-contract AS dependency-image
         ENV PIP_DISABLE_PIP_VERSION_CHECK=1
         COPY requirements.lock /build/requirements.lock
         COPY wheelhouse /build/wheelhouse
@@ -465,49 +603,166 @@ spec:
         # Cache HIT/MISS 모두 Harbor Digest로 고정된 Dependency Image 사용
         FROM ${DEPENDENCY_IMAGE} AS dependencies
 
-        FROM ${RUNTIME_IMAGE} AS base
-        ENV PYTHONDONTWRITEBYTECODE=1 \
+        FROM runtime-contract AS role-head
+        ARG WORKLOAD_ROLE
+        ARG TRAINING_SERVING_PATTERN
+        ARG INFERENCE_SERVER_RUNTIME
+        ARG ARTIFACT_CONTRACT_FILE
+        ARG MODEL_ARTIFACT_POLICY
+        ARG MODEL_ARTIFACT_REFERENCE
+        ARG IMAGE_BUILDER_CATEGORY
+        ARG IMAGE_BUILDER_SPEC_FILE
+        ENV AISTUDIO_WORKLOAD_ROLE=${WORKLOAD_ROLE} \
+            AISTUDIO_TRAINING_SERVING_PATTERN=${TRAINING_SERVING_PATTERN} \
+            AISTUDIO_INFERENCE_SERVER_RUNTIME=${INFERENCE_SERVER_RUNTIME} \
+            AISTUDIO_ARTIFACT_CONTRACT_FILE=${ARTIFACT_CONTRACT_FILE} \
+            AISTUDIO_MODEL_ARTIFACT_POLICY=${MODEL_ARTIFACT_POLICY} \
+            AISTUDIO_MODEL_ARTIFACT_REFERENCE=${MODEL_ARTIFACT_REFERENCE} \
+            AISTUDIO_IMAGE_BUILDER_CATEGORY=${IMAGE_BUILDER_CATEGORY} \
+            AISTUDIO_IMAGE_BUILDER_SPEC_FILE=${IMAGE_BUILDER_SPEC_FILE} \
+            PYTHONDONTWRITEBYTECODE=1 \
             PYTHONUNBUFFERED=1 \
             PIP_DISABLE_PIP_VERSION_CHECK=1
+        LABEL org.opencontainers.image.runtime-contract.role=${WORKLOAD_ROLE} \
+              org.opencontainers.image.training-serving.pattern=${TRAINING_SERVING_PATTERN} \
+              org.opencontainers.image.inference.runtime=${INFERENCE_SERVER_RUNTIME} \
+              org.opencontainers.image.artifact.contract=${ARTIFACT_CONTRACT_FILE} \
+              org.opencontainers.image.model.artifact.policy=${MODEL_ARTIFACT_POLICY} \
+              org.opencontainers.image.model.artifact.reference=${MODEL_ARTIFACT_REFERENCE} \
+              org.opencontainers.image.builder.mode="declarative-spec" \
+              org.opencontainers.image.builder.category=${IMAGE_BUILDER_CATEGORY} \
+              org.opencontainers.image.builder.spec=${IMAGE_BUILDER_SPEC_FILE} \
+              org.opencontainers.image.builder.security-policy="required" \
+              org.opencontainers.image.builder.reproducibility-policy="required" \
+              org.opencontainers.image.layer.L6="role-head:${WORKLOAD_ROLE}"
         WORKDIR /app
+        RUN case "$AISTUDIO_WORKLOAD_ROLE" in train|job|serve|infer) ;; *) echo "invalid workload role" >&2; exit 1 ;; esac \
+            && case "$AISTUDIO_TRAINING_SERVING_PATTERN" in strict|optimized) ;; *) echo "invalid training-serving pattern" >&2; exit 1 ;; esac \
+            && if [ "$AISTUDIO_TRAINING_SERVING_PATTERN" = optimized ]; then case "$AISTUDIO_WORKLOAD_ROLE" in serve|infer) ;; *) echo "optimized pattern is only valid for serve or infer" >&2; exit 1 ;; esac; fi \
+            && case "$AISTUDIO_MODEL_ARTIFACT_POLICY" in external) ;; *) echo "model artifact policy must be external" >&2; exit 1 ;; esac
 
-        FROM base AS test
+        FROM role-head AS test
         COPY --from=dependencies /opt/python-dependencies/ /usr/local/
         COPY app /app
         RUN python -m compileall -q /app \
             && if [ -d /app/tests ]; then python -m pytest -q /app/tests; fi \
             && touch /test-passed
 
-        FROM base AS source-clean
-        COPY app /clean-app
-        RUN rm -rf /clean-app/tests /clean-app/test /clean-app/.git \
-            /clean-app/.pytest_cache /clean-app/.mypy_cache /clean-app/.ruff_cache
+        FROM role-head AS project-app
+        LABEL org.opencontainers.image.layer.L7="project-app"
+        COPY app /project
+        RUN rm -rf /project/tests /project/test /project/.git \
+            /project/.pytest_cache /project/.mypy_cache /project/.ruff_cache \
+            /project/model /project/models /project/model-artifacts
 
-        FROM base AS release
+        FROM role-head AS model-artifact
+        LABEL org.opencontainers.image.layer.L8="model-artifact-external" \
+              org.opencontainers.image.model.artifact.default="external"
+        RUN mkdir -p /model-artifacts \
+            && printf '%s\n' 'Model files are intentionally excluded from the image. Mount or resolve them at deployment runtime.' > /model-artifacts/README.txt
+
+        FROM role-head AS release
+        LABEL org.opencontainers.image.layer.L7="project-app" \
+              org.opencontainers.image.layer.L8="model-artifact-external"
+        ENV MODEL_ARTIFACT_DIR=/model-artifacts
         COPY --from=test /test-passed /tmp/test-passed
         COPY --from=dependencies /opt/python-dependencies/ /usr/local/
-        COPY --from=source-clean /clean-app /app
+        COPY --from=project-app /project /app
+        COPY --from=model-artifact /model-artifacts /model-artifacts
+        COPY image-builder.spec.json /image-builder/image-builder.spec.json
         RUN rm -f /tmp/test-passed
         USER 10001:10001
         CMD ["python", "-m", "app"]
         DOCKERFILE
 
-        printf '%s' 'dependency-image,dependencies,base,test,source-clean,release' > /workspace/generated/docker-layer-stages.txt
+        cat > "$context/$image_builder_spec_file" <<'JSON'
+        {
+          "schemaVersion": "image-builder/v1",
+          "builderMode": "declarative-spec",
+          "category": "{{inputs.parameters.image-builder-category}}",
+          "runtimeLineage": "{{inputs.parameters.runtime-lineage}}",
+          "imageBuilderMode": "declarative-spec",
+          "imageBuilderCategory": "{{inputs.parameters.image-builder-category}}",
+          "imageBuilderSpecFile": "{{inputs.parameters.image-builder-spec-file}}",
+          "imageBuilderPrinciple": "Central declarative image category controls Dockerfile generation, layer policy, validation and report metadata.",
+          "dockerfileStrategy": "multi-stage-target",
+          "buildTargets": {"dependency":"dependency-image","test":"test","release":"release"},
+          "targetPolicy": {"dependencyBuildTarget":"dependency-image","releaseBuildTarget":"release","releaseRequiresTestStage":true,"pushOnlyReleaseTarget":true},
+          "workloadRole": "{{inputs.parameters.workload-role}}",
+          "trainingServingPattern": "{{inputs.parameters.training-serving-pattern}}",
+          "inferenceServerRuntime": "{{inputs.parameters.inference-server-runtime}}",
+          "artifactContractFile": "{{inputs.parameters.artifact-contract-file}}",
+          "modelArtifactPolicy": "{{inputs.parameters.model-artifact-policy}}",
+          "modelArtifactReference": "{{inputs.parameters.model-artifact-reference}}",
+          "modelImagePolicy": {"default":"external","embedModelFilesByDefault":false,"excludeModelDirectoriesFromBuildContext":true,"runtimeInjection":"PVC/ObjectStorage/ModelRegistry"},
+          "securityReproducibilityPolicy": {"required":true,"runtimeDigestPinned":true,"dependencyDigestPinned":true,"lockHashRequired":true,"noLatestTags":true,"nonRootUserRequired":true,"modelExternalByDefault":true,"buildReportRequired":true,"reproducibilityKey":"runtimeDigest+lockHash+pythonAbi+targetPlatform+builderSpec"},
+          "sourcePolicy": {
+            "dockerfileManagedBy": "workflow-template",
+            "manualDockerfilePerProject": false,
+            "centralCategoryRequired": true
+          },
+          "layers": [
+            {"level": "L0", "name": "source-base", "policy": "digest-pin-required"},
+            {"level": "L1", "name": "os-foundation", "policy": "runtime-contract"},
+            {"level": "L2", "name": "accelerator-abi", "policy": "runtime-contract"},
+            {"level": "L3", "name": "language-runtime", "policy": "runtime-contract"},
+            {"level": "L4", "name": "ml-framework", "policy": "runtime-contract"},
+            {"level": "L5", "name": "ml-ops-common", "policy": "runtime-contract"},
+            {"level": "L6", "name": "role-head", "policy": "thin-role-layer"},
+            {"level": "L7", "name": "project-app", "policy": "project-code-layer"},
+            {"level": "L8", "name": "model-artifact", "policy": "artifact-layer"}
+          ],
+          "validationRules": [
+            "runtime-image-must-be-digest-pinned",
+            "workload-role-must-be-train-job-serve-or-infer",
+            "optimized-serving-requires-artifact-contract",
+            "dependency-image-must-be-addressed-by-digest",
+            "security-reproducibility-policy-required",
+            "non-root-user-required",
+            "build-report-required"
+          ]
+        }
+        JSON
+        if [ "$image_builder_spec_file" != "image-builder.spec.json" ]; then
+          cp "$context/$image_builder_spec_file" "$context/image-builder.spec.json"
+        fi
+
+        printf '%s' 'runtime-contract,dependency-image,dependencies,role-head,test,project-app,model-artifact,release' > /workspace/generated/docker-layer-stages.txt
         cat > /workspace/generated/build-spec.json <<'JSON'
         {
           "repositoryName": "{{inputs.parameters.repository-name}}",
           "runtimeImage": "{{inputs.parameters.runtime-image}}",
+          "runtimeLineage": "{{inputs.parameters.runtime-lineage}}",
+          "imageBuilderMode": "declarative-spec",
+          "imageBuilderCategory": "{{inputs.parameters.image-builder-category}}",
+          "imageBuilderSpecFile": "{{inputs.parameters.image-builder-spec-file}}",
+          "imageBuilderPrinciple": "Central declarative image category controls Dockerfile generation, layer policy, validation and report metadata.",
+          "trainingServingPattern": "{{inputs.parameters.training-serving-pattern}}",
+          "inferenceServerRuntime": "{{inputs.parameters.inference-server-runtime}}",
+          "artifactContractFile": "{{inputs.parameters.artifact-contract-file}}",
+          "servingPatternRules": {"strict":"Training and Serving share the same Runtime Contract for Python model execution.","optimized":"Serving may use an optimized inference runtime, but model artifacts must satisfy an explicit artifact contract and validation pipeline."},
+          "declarativeImageBuilder": {"managedBy":"central-image-builder-spec","manualDockerfilePerProject":false,"category":"{{inputs.parameters.image-builder-category}}","specFile":"{{inputs.parameters.image-builder-spec-file}}"},
+          "dockerfileStrategy": "multi-stage-target",
+          "multiStageTargetStrategy": {"stages":["runtime-contract","dependency-image","dependencies","role-head","test","project-app","model-artifact","release"],"targets":{"dependency":"dependency-image","test":"test","release":"release"},"releaseTarget":"release","pushOnlyReleaseTarget":true,"releaseRequiresTestStage":true},
+          "securityReproducibilityPolicy": {"required":true,"runtimeDigestPinned":true,"dependencyDigestPinned":true,"lockHashRequired":true,"noLatestTags":true,"nonRootUserRequired":true,"modelExternalByDefault":true,"buildReportRequired":true,"reproducibilityKey":"runtimeDigest+lockHash+pythonAbi+targetPlatform+builderSpec"},
+          "securityReproducibilityChecks": ["runtime-image-digest-pinned","dependency-image-digest-pinned","lock-hash-recorded","image-digest-recorded","non-root-user","model-external","no-latest-tags","build-report-generated"],
+          "imageNamingConvention": "{{workflow.parameters.registry-address}}/{{workflow.parameters.registry-project}}/<runtime-lineage>/<workload-role>/<project>:<tag>",
           "parentImageDigest": "{{inputs.parameters.parent-image-digest}}",
           "lockFileName": "{{inputs.parameters.lock-file-name}}",
           "lockHash": "{{inputs.parameters.lock-hash}}",
           "imageReference": "{{inputs.parameters.image-reference}}",
           "cacheReference": "{{inputs.parameters.cache-reference}}",
-          "dockerLayerStages": ["dependency-image", "dependencies", "base", "test", "source-clean", "release"]
+          "dockerLayerStages": ["runtime-contract", "dependency-image", "dependencies", "role-head", "test", "project-app", "model-artifact", "release"],
+          "runtimeContractLayers": ["os-base", "accelerator-abi", "language-runtime", "ml-framework", "ml-ops-common"],
+          "runtimeContractCriteria": ["runtime-image-digest", "os-base-digest", "accelerator-abi", "language-runtime", "ml-framework", "ml-ops-common", "target-platform", "python-abi", "security-and-path-contract"],
+          "recommendedImageLayers": [{"level":"L0","name":"source-base","description":"Ubuntu, Debian, UBI, NVIDIA CUDA 등 외부 원천 이미지","operation":"digest-pin-required"},{"level":"L1","name":"os-foundation","description":"OS 패키지, glibc, CA trust, timezone 등 운영 OS 기준"},{"level":"L2","name":"accelerator-abi","description":"CUDA/ROCm, cuDNN, NCCL, GPU driver 호환 ABI"},{"level":"L3","name":"language-runtime","description":"Python/uv/pip 및 Python ABI"},{"level":"L4","name":"ml-framework","description":"PyTorch, TensorFlow, vLLM, Triton 등 ML Framework"},{"level":"L5","name":"ml-ops-common","description":"logging, metrics, tracing, auth, cert, 공통 운영 유틸리티"},{"level":"L6","name":"role-head","description":"train/job/serve/infer 역할별 얇은 실행 Head"},{"level":"L7","name":"project-app","description":"프로젝트 코드와 애플리케이션 설정"},{"level":"L8","name":"model-artifact","description":"모델 파일은 이미지에 포함하지 않고 외부 Model Registry/PVC/Object Storage Reference로 관리"}],
+          "workloadRole": "{{inputs.parameters.workload-role}}"
         }
         JSON
         test -s /workspace/generated/context/Dockerfile
+        test -s /workspace/generated/context/image-builder.spec.json
         test -s /workspace/generated/build-spec.json
-        printf 'Docker layers: dependency-image -> dependencies -> base -> test -> source-clean -> release\n'
+        printf 'Docker layers: L0/L1/L2/L3/L4/L5 runtime-contract -> dependency-image -> dependencies -> L6 role-head -> test -> L7 project-app -> L8 model-artifact -> release\n'
       volumeMounts:
       - name: workspace
         mountPath: "/workspace"
@@ -516,9 +771,18 @@ spec:
       parameters:
       - name: buildkit-address
       - name: runtime-image
+      - name: runtime-lineage
       - name: image-reference
       - name: cache-reference
       - name: dependency-image
+      - name: workload-role
+      - name: training-serving-pattern
+      - name: inference-server-runtime
+      - name: artifact-contract-file
+      - name: model-artifact-policy
+      - name: model-artifact-reference
+      - name: image-builder-category
+      - name: image-builder-spec-file
     outputs:
       parameters:
       - name: image-reference
@@ -554,6 +818,14 @@ spec:
           --opt target=release \
           --opt "build-arg:RUNTIME_IMAGE={{inputs.parameters.runtime-image}}" \
           --opt "build-arg:DEPENDENCY_IMAGE={{inputs.parameters.dependency-image}}" \
+          --opt "build-arg:WORKLOAD_ROLE={{inputs.parameters.workload-role}}" \
+          --opt "build-arg:TRAINING_SERVING_PATTERN={{inputs.parameters.training-serving-pattern}}" \
+          --opt "build-arg:INFERENCE_SERVER_RUNTIME={{inputs.parameters.inference-server-runtime}}" \
+          --opt "build-arg:ARTIFACT_CONTRACT_FILE={{inputs.parameters.artifact-contract-file}}" \
+          --opt "build-arg:MODEL_ARTIFACT_POLICY={{inputs.parameters.model-artifact-policy}}" \
+          --opt "build-arg:MODEL_ARTIFACT_REFERENCE={{inputs.parameters.model-artifact-reference}}" \
+          --opt "build-arg:IMAGE_BUILDER_CATEGORY={{inputs.parameters.image-builder-category}}" \
+          --opt "build-arg:IMAGE_BUILDER_SPEC_FILE={{inputs.parameters.image-builder-spec-file}}" \
           --import-cache "type=registry,ref={{inputs.parameters.cache-reference}}" \
           --export-cache "type=registry,ref={{inputs.parameters.cache-reference}},mode=min" \
           --output "type=image,name={{inputs.parameters.image-reference}},push=true" \
@@ -599,6 +871,15 @@ spec:
       - name: image-digest
       - name: parent-image-digest
       - name: runtime-image
+      - name: runtime-lineage
+      - name: workload-role
+      - name: training-serving-pattern
+      - name: inference-server-runtime
+      - name: artifact-contract-file
+      - name: model-artifact-policy
+      - name: model-artifact-reference
+      - name: image-builder-category
+      - name: image-builder-spec-file
       - name: lock-file-name
       - name: lock-hash
       - name: wheel-count
@@ -637,6 +918,16 @@ spec:
           --arg imageDigest "{{inputs.parameters.image-digest}}" \
           --arg parentImageDigest "{{inputs.parameters.parent-image-digest}}" \
           --arg runtimeImage "{{inputs.parameters.runtime-image}}" \
+          --arg runtimeLineage "{{inputs.parameters.runtime-lineage}}" \
+          --arg workloadRole "{{inputs.parameters.workload-role}}" \
+          --arg trainingServingPattern "{{inputs.parameters.training-serving-pattern}}" \
+          --arg inferenceServerRuntime "{{inputs.parameters.inference-server-runtime}}" \
+          --arg artifactContractFile "{{inputs.parameters.artifact-contract-file}}" \
+          --arg modelArtifactPolicy "{{inputs.parameters.model-artifact-policy}}" \
+          --arg modelArtifactReference "{{inputs.parameters.model-artifact-reference}}" \
+          --arg imageBuilderMode "declarative-spec" \
+          --arg imageBuilderCategory "{{inputs.parameters.image-builder-category}}" \
+          --arg imageBuilderSpecFile "{{inputs.parameters.image-builder-spec-file}}" \
           --arg lockFileName "{{inputs.parameters.lock-file-name}}" \
           --arg lockHash "{{inputs.parameters.lock-hash}}" \
           --argjson wheelCount "{{inputs.parameters.wheel-count}}" \
@@ -650,7 +941,7 @@ spec:
           --argjson dependencyBuildSeconds "{{inputs.parameters.dependency-build-seconds}}" \
           --argjson buildSeconds "{{inputs.parameters.build-seconds}}" \
           --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-          '{workflowName:$workflowName,workflowUid:$workflowUid,namespace:$namespace,repositoryName:$repositoryName,imageReference:$imageReference,imageDigest:$imageDigest,parentImageDigest:$parentImageDigest,runtimeImage:$runtimeImage,lockFileName:$lockFileName,lockHash:$lockHash,wheelCount:$wheelCount,wheelTotalBytes:$wheelTotalBytes,wheelDownloadSeconds:$wheelDownloadSeconds,averageDownloadBytesPerSecond:$averageDownloadBytesPerSecond,testIncludedInReleaseBuild:true,dependencyCacheStatus:$dependencyCacheStatus,dependencyCacheKey:$dependencyCacheKey,dependencyImageReference:$dependencyImageReference,dependencyImageResult:$dependencyImageResult,dependencyBuildSeconds:$dependencyBuildSeconds,buildSeconds:$buildSeconds,packageRepository:"nexus",wheelOnly:true,status:"SUCCEEDED",timestamp:$timestamp}' \
+          '{workflowName:$workflowName,workflowUid:$workflowUid,namespace:$namespace,repositoryName:$repositoryName,imageReference:$imageReference,imageDigest:$imageDigest,parentImageDigest:$parentImageDigest,runtimeImage:$runtimeImage,runtimeLineage:$runtimeLineage,imageNamingConvention:"<registry>/<project>/<runtime-lineage>/<workload-role>/<project-app>:<tag>",workloadRole:$workloadRole,trainingServingPattern:$trainingServingPattern,inferenceServerRuntime:$inferenceServerRuntime,artifactContractFile:$artifactContractFile,artifactContractRequired:($trainingServingPattern=="optimized"),modelArtifactPolicy:$modelArtifactPolicy,modelArtifactReference:$modelArtifactReference,modelFilesEmbedded:false,modelInjectionRequired:($modelArtifactPolicy=="external"),imageBuilderMode:$imageBuilderMode,imageBuilderCategory:$imageBuilderCategory,imageBuilderSpecFile:$imageBuilderSpecFile,builderSpecDriven:true,manualDockerfilePerProject:false,dockerfileStrategy:"multi-stage-target",buildTargets:{dependency:"dependency-image",test:"test",release:"release"},releaseTarget:"release",pushOnlyReleaseTarget:true,releaseRequiresTestStage:true,securityReproducibilityPolicy:{required:true,runtimeDigestPinned:true,dependencyDigestPinned:true,lockHashRequired:true,noLatestTags:true,nonRootUserRequired:true,modelExternalByDefault:true,buildReportRequired:true,reproducibilityKey:"runtimeDigest+lockHash+pythonAbi+targetPlatform+builderSpec"},securityReproducibilityChecks:["runtime-image-digest-pinned","dependency-image-digest-pinned","lock-hash-recorded","image-digest-recorded","non-root-user","model-external","no-latest-tags","build-report-generated"],runtimeContractCriteria:["runtime-image-digest","os-base-digest","accelerator-abi","language-runtime","ml-framework","ml-ops-common","target-platform","python-abi","security-and-path-contract"],recommendedImageLayers:[{"level":"L0","name":"source-base","description":"Ubuntu, Debian, UBI, NVIDIA CUDA 등 외부 원천 이미지","operation":"digest-pin-required"},{"level":"L1","name":"os-foundation","description":"OS 패키지, glibc, CA trust, timezone 등 운영 OS 기준"},{"level":"L2","name":"accelerator-abi","description":"CUDA/ROCm, cuDNN, NCCL, GPU driver 호환 ABI"},{"level":"L3","name":"language-runtime","description":"Python/uv/pip 및 Python ABI"},{"level":"L4","name":"ml-framework","description":"PyTorch, TensorFlow, vLLM, Triton 등 ML Framework"},{"level":"L5","name":"ml-ops-common","description":"logging, metrics, tracing, auth, cert, 공통 운영 유틸리티"},{"level":"L6","name":"role-head","description":"train/job/serve/infer 역할별 얇은 실행 Head"},{"level":"L7","name":"project-app","description":"프로젝트 코드와 애플리케이션 설정"},{"level":"L8","name":"model-artifact","description":"모델 파일은 이미지에 포함하지 않고 외부 Model Registry/PVC/Object Storage Reference로 관리"}],lockFileName:$lockFileName,lockHash:$lockHash,wheelCount:$wheelCount,wheelTotalBytes:$wheelTotalBytes,wheelDownloadSeconds:$wheelDownloadSeconds,averageDownloadBytesPerSecond:$averageDownloadBytesPerSecond,testIncludedInReleaseBuild:true,dependencyCacheStatus:$dependencyCacheStatus,dependencyCacheKey:$dependencyCacheKey,dependencyImageReference:$dependencyImageReference,dependencyImageResult:$dependencyImageResult,dependencyBuildSeconds:$dependencyBuildSeconds,buildSeconds:$buildSeconds,packageRepository:"nexus",wheelOnly:true,status:"SUCCEEDED",timestamp:$timestamp}' \
           > /workspace/output/build-report.json
         jq . /workspace/output/build-report.json
       volumeMounts:

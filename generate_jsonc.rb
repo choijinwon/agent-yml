@@ -6,7 +6,8 @@ TARGET = "workflowtemplate.annotated.jsonc"
 
 PARAMETER_COMMENTS = {
   "bitbucket-address-user-code" => "빌드할 애플리케이션의 내부 Bitbucket Git 주소",
-  "runtime-image" => "반드시 @sha256:<64 hex>로 고정한 Python Runtime 이미지",
+  "runtime-image" => "OS Base·Accelerator ABI·Language Runtime·ML Framework·ML Ops Common을 포함해 digest로 고정한 Runtime Contract 이미지",
+  "runtime-lineage" => "이미지 이름을 업무명이 아닌 런타임 계열 기준으로 묶는 값(예: python311-cpu, python311-cuda124)",
   "nexus-pypi-url" => "외부 PyPI 대신 사용할 내부 Nexus Simple Index URL",
   "registry-address" => "최종 이미지를 Push할 내부 Harbor 주소",
   "registry-project" => "Harbor 내 애플리케이션 프로젝트 이름",
@@ -15,6 +16,14 @@ PARAMETER_COMMENTS = {
   "buildkit-address" => "원격 BuildKit daemon 주소",
   "python-abi" => "Dependency Image Cache Key에 포함할 Python ABI(예: cp311)",
   "target-platform" => "Dependency Image Cache Key에 포함할 OS-Architecture(예: linux-amd64)",
+  "workload-role" => "Runtime Contract 위에 얹을 얇은 Role Head(train/job/serve/infer)",
+  "training-serving-pattern" => "Training과 Serving 관계 패턴(strict: 동일 Runtime Contract, optimized: 추론 서버 최적화 Runtime)",
+  "inference-server-runtime" => "optimized 패턴에서 사용할 추론 서버 Runtime(python-runtime/triton/tensorrt/vllm/onnxruntime/custom)",
+  "artifact-contract-file" => "optimized 패턴에서 모델 산출물 호환성을 검증할 Artifact Contract 파일명",
+  "model-artifact-policy" => "모델 파일 포함 정책. 현재 템플릿은 기본값이자 허용값인 external만 사용해 모델을 이미지에 넣지 않음",
+  "model-artifact-reference" => "외부 Model Registry, Object Storage, PVC 등 배포 Runtime에서 참조할 모델 위치",
+  "image-builder-category" => "중앙 선언형 Image Builder 카테고리(예: ai-ml-python)",
+  "image-builder-spec-file" => "빌드 컨텍스트와 이미지 내부에 포함할 선언형 Image Builder Spec 파일명",
   "force-rebuild-dependencies" => "true이면 기존 Dependency Image가 있어도 강제로 재생성",
   "notification-server-url" => "Build Report POST 대상; 빈 문자열이면 알림 생략"
 }.freeze
