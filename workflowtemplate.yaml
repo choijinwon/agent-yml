@@ -90,13 +90,6 @@ spec:
             value: "{{workflow.parameters.nexus-pypi-url}}"
           - name: lock-file-name
             value: "{{tasks.validate-lock.outputs.parameters.lock-file-name}}"
-      - name: verify-wheelhouse
-        depends: download-wheels.Succeeded
-        template: verify-wheelhouse
-        arguments:
-          parameters:
-          - name: lock-file-name
-            value: "{{tasks.validate-lock.outputs.parameters.lock-file-name}}"
       - name: report-nexus-after-download
         depends: download-wheels.Succeeded
         template: report-nexus-connectivity
@@ -107,7 +100,7 @@ spec:
           - name: phase
             value: after-download
       - name: prepare-build-context
-        depends: validate-runtime-image.Succeeded && verify-wheelhouse.Succeeded
+        depends: validate-runtime-image.Succeeded && download-wheels.Succeeded
         template: prepare-build-context
         arguments:
           parameters:
@@ -229,11 +222,11 @@ spec:
       - sh
       source: |
         set -euo pipefail
-        rm -rf /workspace/source
-        mkdir -p /workspace/source
+        rm -rf /workspace/generated/context/app
+        mkdir -p /workspace/generated/context
         chmod 700 /root/.ssh
         export GIT_SSH_COMMAND="ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/root/.ssh/known_hosts"
-        git clone --depth 1 -- "{{inputs.parameters.git-address}}" /workspace/source
+        git clone --depth 1 -- "{{inputs.parameters.git-address}}" /workspace/generated/context/app
       volumeMounts:
       - name: workspace
         mountPath: "/workspace"
@@ -330,18 +323,18 @@ spec:
       source: |
         set -euo pipefail
         mkdir -p /workspace/generated
-        if [ -f /workspace/source/requirements.lock ]; then
+        if [ -f /workspace/generated/context/app/requirements.lock ]; then
           lock_file=requirements.lock
-        elif [ -f /workspace/source/requirements.txt ]; then
+        elif [ -f /workspace/generated/context/app/requirements.txt ]; then
           lock_file=requirements.txt
           echo "WARNING: requirements.txt fallback is allowed for migration only; use requirements.lock in production" >&2
         else
           echo "neither requirements.lock nor requirements.txt exists" >&2
           exit 1
         fi
-        python /opt/build-tools/scripts/validate_lock.py "/workspace/source/$lock_file"
+        python /opt/build-tools/scripts/validate_lock.py "/workspace/generated/context/app/$lock_file"
         printf '%s' "$lock_file" > /workspace/generated/lock-file-name.txt
-        sha256sum "/workspace/source/$lock_file" | awk '{print $1}' > /workspace/generated/lock-hash.txt
+        sha256sum "/workspace/generated/context/app/$lock_file" | awk '{print $1}' > /workspace/generated/lock-hash.txt
       volumeMounts:
       - name: workspace
         mountPath: "/workspace"
@@ -375,8 +368,8 @@ spec:
       - sh
       source: |
         set -euo pipefail
-        rm -rf /workspace/wheelhouse
-        mkdir -p /workspace/wheelhouse /workspace/generated
+        rm -rf /workspace/generated/context/wheelhouse
+        mkdir -p /workspace/generated/context/wheelhouse /workspace/generated
         start="$(date +%s)"
         python -m pip download \
           --index-url "{{inputs.parameters.nexus-pypi-url}}" \
@@ -385,40 +378,19 @@ spec:
           --disable-pip-version-check \
           --timeout 30 \
           --retries 3 \
-          --requirement "/workspace/source/{{inputs.parameters.lock-file-name}}" \
-          --dest /workspace/wheelhouse
+          --requirement "/workspace/generated/context/app/{{inputs.parameters.lock-file-name}}" \
+          --dest /workspace/generated/context/wheelhouse
         end="$(date +%s)"
         seconds="$((end - start))"
-        count="$(find /workspace/wheelhouse -type f -name '*.whl' | wc -l | tr -d ' ')"
+        count="$(find /workspace/generated/context/wheelhouse -type f -name '*.whl' | wc -l | tr -d ' ')"
         [ "$count" -gt 0 ] || { echo "wheelhouse is empty" >&2; exit 1; }
-        bytes="$(find /workspace/wheelhouse -type f -name '*.whl' -exec stat -c '%s' {} + | awk '{sum += $1} END {print sum + 0}')"
+        bytes="$(find /workspace/generated/context/wheelhouse -type f -name '*.whl' -exec stat -c '%s' {} + | awk '{sum += $1} END {print sum + 0}')"
         average="$((bytes / (seconds > 0 ? seconds : 1)))"
         printf '%s' "$count" > /workspace/generated/wheel-count.txt
         printf '%s' "$bytes" > /workspace/generated/wheel-total-bytes.txt
         printf '%s' "$seconds" > /workspace/generated/download-seconds.txt
         printf '%s' "$average" > /workspace/generated/average-download-bytes-per-second.txt
         printf 'downloaded %s wheels anonymously from Nexus (%s bytes) in %s seconds\n' "$count" "$bytes" "$seconds"
-      volumeMounts:
-      - name: workspace
-        mountPath: "/workspace"
-  - name: verify-wheelhouse
-    inputs:
-      parameters:
-      - name: lock-file-name
-    script:
-      image: harbor.CHANGE_ME.internal/platform/python-build-tools:1.0.0@sha256:0000000000000000000000000000000000000000000000000000000000000000
-      command:
-      - sh
-      source: |
-        set -euo pipefail
-        rm -rf /tmp/python-verify
-        python -m pip install \
-          --no-index \
-          --find-links=/workspace/wheelhouse \
-          --only-binary=:all: \
-          --disable-pip-version-check \
-          --target=/tmp/python-verify \
-          --requirement "/workspace/source/{{inputs.parameters.lock-file-name}}"
       volumeMounts:
       - name: workspace
         mountPath: "/workspace"
@@ -438,12 +410,27 @@ spec:
       - sh
       source: |
         set -euo pipefail
-        rm -rf /workspace/generated/context
-        mkdir -p /workspace/generated/context/app /workspace/generated/context/wheelhouse
-        cp -a /workspace/source/. /workspace/generated/context/app/
-        rm -rf /workspace/generated/context/app/.git
-        cp -a /workspace/wheelhouse/. /workspace/generated/context/wheelhouse/
-        cp "/workspace/source/{{inputs.parameters.lock-file-name}}" /workspace/generated/context/requirements.lock
+        context=/workspace/generated/context
+        test -d "$context/app"
+        test -d "$context/wheelhouse"
+        rm -rf "$context/app/.git"
+        cp "$context/app/{{inputs.parameters.lock-file-name}}" "$context/requirements.lock"
+
+        # BuildKit 전송 대상에서 개발 산출물과 중복 Lock 파일을 제외합니다.
+        cat > "$context/.dockerignore" <<'DOCKERIGNORE'
+        **/.git
+        **/.venv
+        **/__pycache__
+        **/*.pyc
+        **/.pytest_cache
+        **/.mypy_cache
+        **/.ruff_cache
+        **/dist
+        **/build
+        **/node_modules
+        app/requirements.lock
+        app/requirements.txt
+        DOCKERIGNORE
 
         # Docker 레이어 구조를 WorkflowTemplate JSON의 script.source에서 직접 생성합니다.
         cat > /workspace/generated/context/Dockerfile <<'DOCKERFILE'
