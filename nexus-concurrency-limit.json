@@ -1,0 +1,11 @@
+{
+  "apiVersion": "v1",
+  "kind": "ConfigMap",
+  "metadata": {
+    "name": "nexus-concurrency-limit",
+    "namespace": "argo"
+  },
+  "data": {
+    "wheel-downloads": "4"
+  }
+}
