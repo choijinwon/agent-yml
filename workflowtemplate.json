@@ -22,8 +22,8 @@
           "value": "harbor.CHANGE_ME.internal/runtime/python311@sha256:0000000000000000000000000000000000000000000000000000000000000000"
         },
         {
-          "name": "zeus-pypi-url",
-          "value": "https://zeus.CHANGE_ME.internal/simple"
+          "name": "nexus-pypi-url",
+          "value": "https://nexus.CHANGE_ME.internal/simple"
         },
         {
           "name": "registry-address",
@@ -82,12 +82,6 @@
           "secretName": "bitbucket-ssh",
           "defaultMode": 256
         }
-      },
-      {
-        "name": "zeus-pypi-auth",
-        "secret": {
-          "secretName": "zeus-pypi-auth"
-        }
       }
     ],
     "templates": [
@@ -133,13 +127,13 @@
               }
             },
             {
-              "name": "report-zeus-connectivity",
-              "template": "report-zeus-connectivity",
+              "name": "report-nexus-connectivity",
+              "template": "report-nexus-connectivity",
               "arguments": {
                 "parameters": [
                   {
-                    "name": "zeus-pypi-url",
-                    "value": "{{workflow.parameters.zeus-pypi-url}}"
+                    "name": "nexus-pypi-url",
+                    "value": "{{workflow.parameters.nexus-pypi-url}}"
                   },
                   {
                     "name": "phase",
@@ -155,13 +149,13 @@
             },
             {
               "name": "download-wheels",
-              "depends": "validate-lock.Succeeded && report-zeus-connectivity.Succeeded",
+              "depends": "validate-lock.Succeeded && report-nexus-connectivity.Succeeded",
               "template": "download-wheels",
               "arguments": {
                 "parameters": [
                   {
-                    "name": "zeus-pypi-url",
-                    "value": "{{workflow.parameters.zeus-pypi-url}}"
+                    "name": "nexus-pypi-url",
+                    "value": "{{workflow.parameters.nexus-pypi-url}}"
                   },
                   {
                     "name": "lock-file-name",
@@ -184,14 +178,14 @@
               }
             },
             {
-              "name": "report-zeus-after-download",
+              "name": "report-nexus-after-download",
               "depends": "download-wheels.Succeeded",
-              "template": "report-zeus-connectivity",
+              "template": "report-nexus-connectivity",
               "arguments": {
                 "parameters": [
                   {
-                    "name": "zeus-pypi-url",
-                    "value": "{{workflow.parameters.zeus-pypi-url}}"
+                    "name": "nexus-pypi-url",
+                    "value": "{{workflow.parameters.nexus-pypi-url}}"
                   },
                   {
                     "name": "phase",
@@ -202,7 +196,7 @@
             },
             {
               "name": "prepare-build-context",
-              "depends": "validate-runtime-image.Succeeded && verify-wheelhouse.Succeeded && report-zeus-after-download.Succeeded",
+              "depends": "validate-runtime-image.Succeeded && verify-wheelhouse.Succeeded && report-nexus-after-download.Succeeded",
               "template": "prepare-build-context",
               "arguments": {
                 "parameters": [
@@ -347,12 +341,12 @@
                     "value": "{{tasks.download-wheels.outputs.parameters.average-download-bytes-per-second}}"
                   },
                   {
-                    "name": "zeus-before-download-total-seconds",
-                    "value": "{{tasks.report-zeus-connectivity.outputs.parameters.total-seconds}}"
+                    "name": "nexus-before-download-total-seconds",
+                    "value": "{{tasks.report-nexus-connectivity.outputs.parameters.total-seconds}}"
                   },
                   {
-                    "name": "zeus-after-download-total-seconds",
-                    "value": "{{tasks.report-zeus-after-download.outputs.parameters.total-seconds}}"
+                    "name": "nexus-after-download-total-seconds",
+                    "value": "{{tasks.report-nexus-after-download.outputs.parameters.total-seconds}}"
                   },
                   {
                     "name": "build-seconds",
@@ -470,11 +464,11 @@
         }
       },
       {
-        "name": "report-zeus-connectivity",
+        "name": "report-nexus-connectivity",
         "inputs": {
           "parameters": [
             {
-              "name": "zeus-pypi-url"
+              "name": "nexus-pypi-url"
             },
             {
               "name": "phase"
@@ -486,7 +480,7 @@
             {
               "name": "report-json",
               "valueFrom": {
-                "path": "/tmp/zeus-performance.json"
+                "path": "/tmp/nexus-performance.json"
               }
             },
             {
@@ -504,8 +498,8 @@
           ],
           "artifacts": [
             {
-              "name": "zeus-performance-report",
-              "path": "/tmp/zeus-performance.json",
+              "name": "nexus-performance-report",
+              "path": "/tmp/nexus-performance.json",
               "archive": {
                 "none": {
                 }
@@ -518,27 +512,7 @@
           "command": [
             "sh"
           ],
-          "env": [
-            {
-              "name": "ZEUS_USERNAME",
-              "valueFrom": {
-                "secretKeyRef": {
-                  "name": "zeus-pypi-auth",
-                  "key": "username"
-                }
-              }
-            },
-            {
-              "name": "ZEUS_PASSWORD",
-              "valueFrom": {
-                "secretKeyRef": {
-                  "name": "zeus-pypi-auth",
-                  "key": "password"
-                }
-              }
-            }
-          ],
-          "source": "set -euo pipefail\numask 077\npython - <<'PY'\nimport os\nfrom urllib.parse import urlsplit\n\nhost = urlsplit(r'''{{inputs.parameters.zeus-pypi-url}}''').hostname\nif not host:\n    raise SystemExit(\"zeus-pypi-url has no hostname\")\nwith open(\"/tmp/zeus.netrc\", \"w\", encoding=\"utf-8\") as netrc:\n    netrc.write(f\"machine {host}\\nlogin {os.environ['ZEUS_USERNAME']}\\npassword {os.environ['ZEUS_PASSWORD']}\\n\")\nPY\nchmod 600 /tmp/zeus.netrc\nformat='{\"dnsSeconds\":%{time_namelookup},\"tcpConnectSeconds\":%{time_connect},\"tlsConnectSeconds\":%{time_appconnect},\"firstByteSeconds\":%{time_starttransfer},\"totalSeconds\":%{time_total},\"downloadBytes\":%{size_download},\"downloadSpeedBytesPerSecond\":%{speed_download},\"httpCode\":%{http_code},\"remoteIp\":\"%{remote_ip}\",\"remotePort\":%{remote_port},\"redirectCount\":%{num_redirects}}'\nmetrics=\"$(curl --silent --show-error --location --fail-with-body --output /dev/null --netrc-file /tmp/zeus.netrc --write-out \"$format\" -- \"{{inputs.parameters.zeus-pypi-url}}\")\"\nrm -f /tmp/zeus.netrc\njq -n \\\n  --argjson metrics \"$metrics\" \\\n  --arg phase \"{{inputs.parameters.phase}}\" \\\n  --arg timestamp \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\" \\\n  --arg workflowName \"{{workflow.name}}\" \\\n  --arg workflowUid \"{{workflow.uid}}\" \\\n  --arg namespace \"{{workflow.namespace}}\" \\\n  '$metrics + {phase:$phase,timestamp:$timestamp,workflowName:$workflowName,workflowUid:$workflowUid,namespace:$namespace}' \\\n  > /tmp/zeus-performance.json\njq -r '.totalSeconds' /tmp/zeus-performance.json > /tmp/total-seconds.txt\njq -r '.httpCode' /tmp/zeus-performance.json > /tmp/http-code.txt\njq '{phase,totalSeconds,httpCode}' /tmp/zeus-performance.json\n"
+          "source": "set -euo pipefail\nformat='{\"dnsSeconds\":%{time_namelookup},\"tcpConnectSeconds\":%{time_connect},\"tlsConnectSeconds\":%{time_appconnect},\"firstByteSeconds\":%{time_starttransfer},\"totalSeconds\":%{time_total},\"downloadBytes\":%{size_download},\"downloadSpeedBytesPerSecond\":%{speed_download},\"httpCode\":%{http_code},\"remoteIp\":\"%{remote_ip}\",\"remotePort\":%{remote_port},\"redirectCount\":%{num_redirects}}'\nmetrics=\"$(curl --silent --show-error --location --fail-with-body --output /dev/null --write-out \"$format\" -- \"{{inputs.parameters.nexus-pypi-url}}\")\"\njq -n \\\n  --argjson metrics \"$metrics\" \\\n  --arg phase \"{{inputs.parameters.phase}}\" \\\n  --arg authentication \"ANONYMOUS\" \\\n  --arg timestamp \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\" \\\n  --arg workflowName \"{{workflow.name}}\" \\\n  --arg workflowUid \"{{workflow.uid}}\" \\\n  --arg namespace \"{{workflow.namespace}}\" \\\n  '$metrics + {phase:$phase,authentication:$authentication,timestamp:$timestamp,workflowName:$workflowName,workflowUid:$workflowUid,namespace:$namespace}' \\\n  > /tmp/nexus-performance.json\njq -r '.totalSeconds' /tmp/nexus-performance.json > /tmp/total-seconds.txt\njq -r '.httpCode' /tmp/nexus-performance.json > /tmp/http-code.txt\njq '{phase,authentication,totalSeconds,httpCode}' /tmp/nexus-performance.json\n"
         }
       },
       {
@@ -578,7 +552,7 @@
         "synchronization": {
           "semaphore": {
             "configMapKeyRef": {
-              "name": "zeus-concurrency-limit",
+              "name": "nexus-concurrency-limit",
               "key": "wheel-downloads"
             }
           }
@@ -586,7 +560,7 @@
         "inputs": {
           "parameters": [
             {
-              "name": "zeus-pypi-url"
+              "name": "nexus-pypi-url"
             },
             {
               "name": "lock-file-name"
@@ -626,27 +600,7 @@
           "command": [
             "sh"
           ],
-          "env": [
-            {
-              "name": "ZEUS_USERNAME",
-              "valueFrom": {
-                "secretKeyRef": {
-                  "name": "zeus-pypi-auth",
-                  "key": "username"
-                }
-              }
-            },
-            {
-              "name": "ZEUS_PASSWORD",
-              "valueFrom": {
-                "secretKeyRef": {
-                  "name": "zeus-pypi-auth",
-                  "key": "password"
-                }
-              }
-            }
-          ],
-          "source": "set -euo pipefail\nrm -rf /workspace/wheelhouse\nmkdir -p /workspace/wheelhouse /workspace/generated\nstart=\"$(date +%s)\"\nPIP_INDEX_URL=\"$(python - <<'PY'\nimport os\nfrom urllib.parse import quote, urlsplit, urlunsplit\nurl = r'''{{inputs.parameters.zeus-pypi-url}}'''\nparts = urlsplit(url)\nuser = quote(os.environ['ZEUS_USERNAME'], safe='')\npassword = quote(os.environ['ZEUS_PASSWORD'], safe='')\nprint(urlunsplit((parts.scheme, f'{user}:{password}@{parts.netloc}', parts.path, parts.query, parts.fragment)))\nPY\n)\"\npython -m pip download \\\n  --index-url \"$PIP_INDEX_URL\" \\\n  --only-binary=:all: \\\n  --prefer-binary \\\n  --disable-pip-version-check \\\n  --timeout 30 \\\n  --retries 3 \\\n  --requirement \"/workspace/source/{{inputs.parameters.lock-file-name}}\" \\\n  --dest /workspace/wheelhouse\nunset PIP_INDEX_URL\nend=\"$(date +%s)\"\nseconds=\"$((end - start))\"\ncount=\"$(find /workspace/wheelhouse -type f -name '*.whl' | wc -l | tr -d ' ')\"\n[ \"$count\" -gt 0 ] || { echo \"wheelhouse is empty\" >&2; exit 1; }\nbytes=\"$(find /workspace/wheelhouse -type f -name '*.whl' -exec stat -c '%s' {} + | awk '{sum += $1} END {print sum + 0}')\"\naverage=\"$((bytes / (seconds > 0 ? seconds : 1)))\"\nprintf '%s' \"$count\" > /workspace/generated/wheel-count.txt\nprintf '%s' \"$bytes\" > /workspace/generated/wheel-total-bytes.txt\nprintf '%s' \"$seconds\" > /workspace/generated/download-seconds.txt\nprintf '%s' \"$average\" > /workspace/generated/average-download-bytes-per-second.txt\nprintf 'downloaded %s wheels (%s bytes) in %s seconds\\n' \"$count\" \"$bytes\" \"$seconds\"\n",
+          "source": "set -euo pipefail\nrm -rf /workspace/wheelhouse\nmkdir -p /workspace/wheelhouse /workspace/generated\nstart=\"$(date +%s)\"\npython -m pip download \\\n  --index-url \"{{inputs.parameters.nexus-pypi-url}}\" \\\n  --only-binary=:all: \\\n  --prefer-binary \\\n  --disable-pip-version-check \\\n  --timeout 30 \\\n  --retries 3 \\\n  --requirement \"/workspace/source/{{inputs.parameters.lock-file-name}}\" \\\n  --dest /workspace/wheelhouse\nend=\"$(date +%s)\"\nseconds=\"$((end - start))\"\ncount=\"$(find /workspace/wheelhouse -type f -name '*.whl' | wc -l | tr -d ' ')\"\n[ \"$count\" -gt 0 ] || { echo \"wheelhouse is empty\" >&2; exit 1; }\nbytes=\"$(find /workspace/wheelhouse -type f -name '*.whl' -exec stat -c '%s' {} + | awk '{sum += $1} END {print sum + 0}')\"\naverage=\"$((bytes / (seconds > 0 ? seconds : 1)))\"\nprintf '%s' \"$count\" > /workspace/generated/wheel-count.txt\nprintf '%s' \"$bytes\" > /workspace/generated/wheel-total-bytes.txt\nprintf '%s' \"$seconds\" > /workspace/generated/download-seconds.txt\nprintf '%s' \"$average\" > /workspace/generated/average-download-bytes-per-second.txt\nprintf 'downloaded %s wheels anonymously from Nexus (%s bytes) in %s seconds\\n' \"$count\" \"$bytes\" \"$seconds\"\n",
           "volumeMounts": [
             {
               "name": "workspace",
@@ -710,7 +664,7 @@
           "command": [
             "sh"
           ],
-      "source": "set -euo pipefail\nrm -rf /workspace/generated/context\nmkdir -p /workspace/generated/context/app /workspace/generated/context/wheelhouse\ncp -a /workspace/source/. /workspace/generated/context/app/\nrm -rf /workspace/generated/context/app/.git /workspace/generated/context/app/tests /workspace/generated/context/app/test\ncp -a /workspace/wheelhouse/. /workspace/generated/context/wheelhouse/\ncp \"/workspace/source/{{inputs.parameters.lock-file-name}}\" /workspace/generated/context/requirements.lock\n\n# Docker 레이어 구조를 WorkflowTemplate JSON의 script.source에서 직접 생성합니다.\ncat > /workspace/generated/context/Dockerfile <<'DOCKERFILE'\n# syntax=docker/dockerfile:1.7\nARG RUNTIME_IMAGE\n\n# Layer 1: 변경 빈도가 낮은 공통 Runtime Base\nFROM ${RUNTIME_IMAGE} AS base\nENV PYTHONDONTWRITEBYTECODE=1 \\\n    PYTHONUNBUFFERED=1 \\\n    PIP_DISABLE_PIP_VERSION_CHECK=1\nWORKDIR /app\n\n# Layer 2: Lock/Wheelhouse를 소스보다 먼저 복사해 의존성 캐시 유지\nFROM base AS dependencies\nCOPY requirements.lock /build/requirements.lock\nCOPY wheelhouse /build/wheelhouse\nRUN python -m pip install \\\n      --no-index \\\n      --find-links=/build/wheelhouse \\\n      --only-binary=:all: \\\n      --prefix=/opt/python-dependencies \\\n      -r /build/requirements.lock \\\n    && rm -rf /root/.cache/pip /build/wheelhouse\n\n# Layer 3: 테스트 전용 계층이며 최종 Release 이미지에는 포함하지 않음\nFROM base AS test\nCOPY --from=dependencies /opt/python-dependencies/ /usr/local/\nCOPY app /app\nRUN python -m compileall -q /app \\\n    && if [ -d /app/tests ]; then python -m pytest -q /app/tests; fi\n\n# Layer 4: 자주 변경되는 애플리케이션 소스를 의존성 다음에 배치\nFROM base AS source-clean\nCOPY app /clean-app\nRUN rm -rf /clean-app/tests /clean-app/test /clean-app/.git \\\n    /clean-app/.pytest_cache /clean-app/.mypy_cache /clean-app/.ruff_cache\n\n# Layer 5: 실행 의존성과 정리된 소스만 포함한 최종 이미지\nFROM base AS release\nCOPY --from=dependencies /opt/python-dependencies/ /usr/local/\nCOPY --from=source-clean /clean-app /app\nUSER 10001:10001\nCMD [\"python\", \"-m\", \"app\"]\nDOCKERFILE\n\nprintf '%s' 'base,dependencies,test,source-clean,release' > /workspace/generated/docker-layer-stages.txt\ncat > /workspace/generated/build-spec.json <<'JSON'\n{\n  \"repositoryName\": \"{{inputs.parameters.repository-name}}\",\n  \"runtimeImage\": \"{{inputs.parameters.runtime-image}}\",\n  \"parentImageDigest\": \"{{inputs.parameters.parent-image-digest}}\",\n  \"lockFileName\": \"{{inputs.parameters.lock-file-name}}\",\n  \"lockHash\": \"{{inputs.parameters.lock-hash}}\",\n  \"imageReference\": \"{{inputs.parameters.image-reference}}\",\n  \"cacheReference\": \"{{inputs.parameters.cache-reference}}\",\n  \"dockerLayerStages\": [\"base\", \"dependencies\", \"test\", \"source-clean\", \"release\"]\n}\nJSON\ntest -s /workspace/generated/context/Dockerfile\ntest -s /workspace/generated/build-spec.json\nprintf 'Docker layers: base -> dependencies -> test -> source-clean -> release\\n'\n",
+          "source": "set -euo pipefail\nrm -rf /workspace/generated/context\nmkdir -p /workspace/generated/context/app /workspace/generated/context/wheelhouse\ncp -a /workspace/source/. /workspace/generated/context/app/\nrm -rf /workspace/generated/context/app/.git /workspace/generated/context/app/tests /workspace/generated/context/app/test\ncp -a /workspace/wheelhouse/. /workspace/generated/context/wheelhouse/\ncp \"/workspace/source/{{inputs.parameters.lock-file-name}}\" /workspace/generated/context/requirements.lock\n\n# Docker 레이어 구조를 WorkflowTemplate JSON의 script.source에서 직접 생성합니다.\ncat > /workspace/generated/context/Dockerfile <<'DOCKERFILE'\n# syntax=docker/dockerfile:1.7\nARG RUNTIME_IMAGE\n\n# Layer 1: 변경 빈도가 낮은 공통 Runtime Base\nFROM ${RUNTIME_IMAGE} AS base\nENV PYTHONDONTWRITEBYTECODE=1 \\\n    PYTHONUNBUFFERED=1 \\\n    PIP_DISABLE_PIP_VERSION_CHECK=1\nWORKDIR /app\n\n# Layer 2: Lock/Wheelhouse를 소스보다 먼저 복사해 의존성 캐시 유지\nFROM base AS dependencies\nCOPY requirements.lock /build/requirements.lock\nCOPY wheelhouse /build/wheelhouse\nRUN python -m pip install \\\n      --no-index \\\n      --find-links=/build/wheelhouse \\\n      --only-binary=:all: \\\n      --prefix=/opt/python-dependencies \\\n      -r /build/requirements.lock \\\n    && rm -rf /root/.cache/pip /build/wheelhouse\n\n# Layer 3: 테스트 전용 계층이며 최종 Release 이미지에는 포함하지 않음\nFROM base AS test\nCOPY --from=dependencies /opt/python-dependencies/ /usr/local/\nCOPY app /app\nRUN python -m compileall -q /app \\\n    && if [ -d /app/tests ]; then python -m pytest -q /app/tests; fi\n\n# Layer 4: 자주 변경되는 애플리케이션 소스를 의존성 다음에 배치\nFROM base AS source-clean\nCOPY app /clean-app\nRUN rm -rf /clean-app/tests /clean-app/test /clean-app/.git \\\n    /clean-app/.pytest_cache /clean-app/.mypy_cache /clean-app/.ruff_cache\n\n# Layer 5: 실행 의존성과 정리된 소스만 포함한 최종 이미지\nFROM base AS release\nCOPY --from=dependencies /opt/python-dependencies/ /usr/local/\nCOPY --from=source-clean /clean-app /app\nUSER 10001:10001\nCMD [\"python\", \"-m\", \"app\"]\nDOCKERFILE\n\nprintf '%s' 'base,dependencies,test,source-clean,release' > /workspace/generated/docker-layer-stages.txt\ncat > /workspace/generated/build-spec.json <<'JSON'\n{\n  \"repositoryName\": \"{{inputs.parameters.repository-name}}\",\n  \"runtimeImage\": \"{{inputs.parameters.runtime-image}}\",\n  \"parentImageDigest\": \"{{inputs.parameters.parent-image-digest}}\",\n  \"lockFileName\": \"{{inputs.parameters.lock-file-name}}\",\n  \"lockHash\": \"{{inputs.parameters.lock-hash}}\",\n  \"imageReference\": \"{{inputs.parameters.image-reference}}\",\n  \"cacheReference\": \"{{inputs.parameters.cache-reference}}\",\n  \"dockerLayerStages\": [\"base\", \"dependencies\", \"test\", \"source-clean\", \"release\"]\n}\nJSON\ntest -s /workspace/generated/context/Dockerfile\ntest -s /workspace/generated/build-spec.json\nprintf 'Docker layers: base -> dependencies -> test -> source-clean -> release\\n'\n",
           "volumeMounts": [
             {
               "name": "workspace",
@@ -895,10 +849,10 @@
               "name": "average-download-bytes-per-second"
             },
             {
-              "name": "zeus-before-download-total-seconds"
+              "name": "nexus-before-download-total-seconds"
             },
             {
-              "name": "zeus-after-download-total-seconds"
+              "name": "nexus-after-download-total-seconds"
             },
             {
               "name": "build-seconds"
@@ -930,7 +884,7 @@
           "command": [
             "sh"
           ],
-          "source": "set -euo pipefail\nmkdir -p /workspace/output\njq -n \\\n  --arg workflowName \"{{workflow.name}}\" \\\n  --arg workflowUid \"{{workflow.uid}}\" \\\n  --arg namespace \"{{workflow.namespace}}\" \\\n  --arg repositoryName \"{{inputs.parameters.repository-name}}\" \\\n  --arg imageReference \"{{inputs.parameters.image-reference}}\" \\\n  --arg imageDigest \"{{inputs.parameters.image-digest}}\" \\\n  --arg parentImageDigest \"{{inputs.parameters.parent-image-digest}}\" \\\n  --arg runtimeImage \"{{inputs.parameters.runtime-image}}\" \\\n  --arg lockFileName \"{{inputs.parameters.lock-file-name}}\" \\\n  --arg lockHash \"{{inputs.parameters.lock-hash}}\" \\\n  --argjson wheelCount \"{{inputs.parameters.wheel-count}}\" \\\n  --argjson wheelTotalBytes \"{{inputs.parameters.wheel-total-bytes}}\" \\\n  --argjson wheelDownloadSeconds \"{{inputs.parameters.wheel-download-seconds}}\" \\\n  --argjson averageDownloadBytesPerSecond \"{{inputs.parameters.average-download-bytes-per-second}}\" \\\n  --argjson zeusBeforeDownloadTotalSeconds \"{{inputs.parameters.zeus-before-download-total-seconds}}\" \\\n  --argjson zeusAfterDownloadTotalSeconds \"{{inputs.parameters.zeus-after-download-total-seconds}}\" \\\n  --argjson buildSeconds \"{{inputs.parameters.build-seconds}}\" \\\n  --arg timestamp \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\" \\\n  '{workflowName:$workflowName,workflowUid:$workflowUid,namespace:$namespace,repositoryName:$repositoryName,imageReference:$imageReference,imageDigest:$imageDigest,parentImageDigest:$parentImageDigest,runtimeImage:$runtimeImage,lockFileName:$lockFileName,lockHash:$lockHash,wheelCount:$wheelCount,wheelTotalBytes:$wheelTotalBytes,wheelDownloadSeconds:$wheelDownloadSeconds,averageDownloadBytesPerSecond:$averageDownloadBytesPerSecond,zeusBeforeDownloadTotalSeconds:$zeusBeforeDownloadTotalSeconds,zeusAfterDownloadTotalSeconds:$zeusAfterDownloadTotalSeconds,buildSeconds:$buildSeconds,packageRepository:\"zeus\",wheelOnly:true,status:\"SUCCEEDED\",timestamp:$timestamp}' \\\n  > /workspace/output/build-report.json\njq . /workspace/output/build-report.json\n",
+          "source": "set -euo pipefail\nmkdir -p /workspace/output\njq -n \\\n  --arg workflowName \"{{workflow.name}}\" \\\n  --arg workflowUid \"{{workflow.uid}}\" \\\n  --arg namespace \"{{workflow.namespace}}\" \\\n  --arg repositoryName \"{{inputs.parameters.repository-name}}\" \\\n  --arg imageReference \"{{inputs.parameters.image-reference}}\" \\\n  --arg imageDigest \"{{inputs.parameters.image-digest}}\" \\\n  --arg parentImageDigest \"{{inputs.parameters.parent-image-digest}}\" \\\n  --arg runtimeImage \"{{inputs.parameters.runtime-image}}\" \\\n  --arg lockFileName \"{{inputs.parameters.lock-file-name}}\" \\\n  --arg lockHash \"{{inputs.parameters.lock-hash}}\" \\\n  --argjson wheelCount \"{{inputs.parameters.wheel-count}}\" \\\n  --argjson wheelTotalBytes \"{{inputs.parameters.wheel-total-bytes}}\" \\\n  --argjson wheelDownloadSeconds \"{{inputs.parameters.wheel-download-seconds}}\" \\\n  --argjson averageDownloadBytesPerSecond \"{{inputs.parameters.average-download-bytes-per-second}}\" \\\n  --argjson nexusBeforeDownloadTotalSeconds \"{{inputs.parameters.nexus-before-download-total-seconds}}\" \\\n  --argjson nexusAfterDownloadTotalSeconds \"{{inputs.parameters.nexus-after-download-total-seconds}}\" \\\n  --argjson buildSeconds \"{{inputs.parameters.build-seconds}}\" \\\n  --arg timestamp \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\" \\\n  '{workflowName:$workflowName,workflowUid:$workflowUid,namespace:$namespace,repositoryName:$repositoryName,imageReference:$imageReference,imageDigest:$imageDigest,parentImageDigest:$parentImageDigest,runtimeImage:$runtimeImage,lockFileName:$lockFileName,lockHash:$lockHash,wheelCount:$wheelCount,wheelTotalBytes:$wheelTotalBytes,wheelDownloadSeconds:$wheelDownloadSeconds,averageDownloadBytesPerSecond:$averageDownloadBytesPerSecond,nexusBeforeDownloadTotalSeconds:$nexusBeforeDownloadTotalSeconds,nexusAfterDownloadTotalSeconds:$nexusAfterDownloadTotalSeconds,buildSeconds:$buildSeconds,packageRepository:\"nexus\",wheelOnly:true,status:\"SUCCEEDED\",timestamp:$timestamp}' \\\n  > /workspace/output/build-report.json\njq . /workspace/output/build-report.json\n",
           "volumeMounts": [
             {
               "name": "workspace",
