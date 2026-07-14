@@ -1,0 +1,362 @@
+{
+  "apiVersion": "argoproj.io/v1alpha1",
+  "kind": "WorkflowTemplate",
+  "metadata": {
+    "name": "run-image-template-with-buildkit",
+    "namespace": "argo",
+    "uid": "ffffffff023138123",
+    "resourceVersion": "710342633",
+    "generation": 8,
+    "creationTimestamp": "2026-03-04T22:52:04Z",
+    "labels": {
+      "workflows.argoproj.io/creator": "system-serviceaccount-argo-argo-server"
+    },
+    "managedFields": []
+  },
+  "spec": {
+    "templates": [
+      {
+        "name": "main",
+        "inputs": {},
+        "outputs": {
+          "parameters": [
+            {
+              "name": "user-code-repo-name",
+              "valueFrom": {
+                "parameter": "{{tasks.get-repository-name-from-git.outputs.parameters.user-code-repo-name}}"
+              }
+            },
+            {
+              "name": "docker-template-repo-name",
+              "valueFrom": {
+                "parameter": "{{tasks.get-repository-name-from-git.outputs.parameters.docker-template-repo-name}}"
+              }
+            },
+            {
+              "name": "image-digest",
+              "valueFrom": {
+                "parameter": "{{tasks.git-clone-change-dockerfile-and-build-docker.outputs.parameters.image-digest}}"
+              }
+            },
+            {
+              "name": "parsed-image-digest",
+              "valueFrom": {
+                "parameter": "{{tasks.parse-image-digest.outputs.parameters.parsed-image-digest}}"
+              }
+            },
+            {
+              "name": "dockerfile-content",
+              "valueFrom": {
+                "parameter": "{{tasks.git-clone-change-dockerfile-and-build-docker.outputs.parameters.dockerfile-content}}"
+              }
+            }
+          ],
+          "artifacts": [
+            {
+              "name": "project-toml-change-py",
+              "from": "{{tasks.git-clone-change-dockerfile-and-build-docker.outputs.artifacts.project-toml-change-py}}"
+            }
+          ]
+        },
+        "metadata": {},
+        "dag": {
+          "tasks": [
+            {
+              "name": "get-repository-name-from-git",
+              "template": "get-repository-name-from-git",
+              "arguments": {
+                "parameters": [
+                  {
+                    "name": "bitbucket-address-user-code",
+                    "value": "{{workflow.parameters.bitbucket-address-user-code}}"
+                  },
+                  {
+                    "name": "bitbucket-address-docker-template",
+                    "value": "{{workflow.parameters.bitbucket-address-docker-template}}"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "git-clone-change-dockerfile-and-build-docker",
+              "template": "git-clone-change-dockerfile-and-build-docker",
+              "dependencies": [
+                "get-repository-name-from-git"
+              ],
+              "arguments": {
+                "parameters": [
+                  {
+                    "name": "bitbucket-address-user-code",
+                    "value": "{{workflow.parameters.bitbucket-address-user-code}}"
+                  },
+                  {
+                    "name": "bitbucket-address-docker-template",
+                    "value": "{{workflow.parameters.bitbucket-address-docker-template}}"
+                  },
+                  {
+                    "name": "user-code-repo-name",
+                    "value": "{{tasks.get-repository-name-from-git.outputs.parameters.user-code-repo-name}}"
+                  },
+                  {
+                    "name": "docker-template-repo-name",
+                    "value": "{{tasks.get-repository-name-from-git.outputs.parameters.docker-template-repo-name}}"
+                  },
+                  {
+                    "name": "registry-address",
+                    "value": "{{workflow.parameters.registry-address}}"
+                  },
+                  {
+                    "name": "registry-project",
+                    "value": "{{workflow.parameters.registry-project}}"
+                  },
+                  {
+                    "name": "image-name",
+                    "value": "{{workflow.parameters.image-name}}"
+                  },
+                  {
+                    "name": "image-tag",
+                    "value": "{{workflow.parameters.image-tag}}"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "parse-image-digest",
+              "template": "parse-image-digest",
+              "dependencies": [
+                "git-clone-change-dockerfile-and-build-docker"
+              ],
+              "arguments": {
+                "parameters": [
+                  {
+                    "name": "image-digest",
+                    "value": "{{tasks.git-clone-change-dockerfile-and-build-docker.outputs.parameters.image-digest}}"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "send-http-request",
+              "template": "notify-server",
+              "dependencies": [
+                "git-clone-change-dockerfile-and-build-docker",
+                "parse-image-digest"
+              ],
+              "arguments": {
+                "parameters": [
+                  {
+                    "name": "notification-server-url",
+                    "value": "{{workflow.parameters.notification-server-url}}"
+                  },
+                  {
+                    "name": "image-digest",
+                    "value": "{{tasks.parse-image-digest.outputs.parameters.parsed-image-digest}}"
+                  },
+                  {
+                    "name": "image-reference",
+                    "value": "{{workflow.parameters.registry-address}}/{{workflow.parameters.registry-project}}/{{workflow.parameters.image-name}}:{{workflow.parameters.image-tag}}"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "get-repository-name-from-git",
+        "inputs": {
+          "parameters": [
+            {
+              "name": "bitbucket-address-user-code"
+            },
+            {
+              "name": "bitbucket-address-docker-template"
+            }
+          ]
+        },
+        "outputs": {
+          "parameters": [
+            {
+              "name": "user-code-repo-name",
+              "valueFrom": {
+                "path": "/tmp/repo-name-user-code.txt"
+              }
+            },
+            {
+              "name": "docker-template-repo-name",
+              "valueFrom": {
+                "path": "/tmp/repo-name-docker-template.txt"
+              }
+            }
+          ]
+        },
+        "metadata": {},
+        "script": {
+          "image": "harbor-srep01.ttttt.com/aistudio/ubuntu2404-uv-py39-py314-wf-py313:0.0.6",
+          "command": [
+            "/usr/local/bin/uv",
+            "run",
+            "python"
+          ],
+          "source": "import re\n\ndef parse_repository_name(url):\n    normalized = url.rstrip('/').removesuffix('.git')\n    name = normalized.rsplit('/', 1)[-1]\n    if not re.fullmatch(r'[A-Za-z0-9._-]+', name):\n        raise ValueError(f'invalid repository name: {name}')\n    return name\n\nuser_code = parse_repository_name(r'''{{inputs.parameters.bitbucket-address-user-code}}''')\ndocker_template = parse_repository_name(r'''{{inputs.parameters.bitbucket-address-docker-template}}''')\n\nwith open('/tmp/repo-name-user-code.txt', 'w', encoding='utf-8') as file:\n    file.write(user_code)\n\nwith open('/tmp/repo-name-docker-template.txt', 'w', encoding='utf-8') as file:\n    file.write(docker_template)\n"
+        }
+      },
+      {
+        "name": "git-clone-change-dockerfile-and-build-docker",
+        "inputs": {
+          "parameters": [
+            {
+              "name": "bitbucket-address-user-code"
+            },
+            {
+              "name": "bitbucket-address-docker-template"
+            },
+            {
+              "name": "user-code-repo-name"
+            },
+            {
+              "name": "docker-template-repo-name"
+            },
+            {
+              "name": "registry-address"
+            },
+            {
+              "name": "registry-project"
+            },
+            {
+              "name": "image-name"
+            },
+            {
+              "name": "image-tag"
+            }
+          ]
+        },
+        "outputs": {
+          "parameters": [
+            {
+              "name": "image-digest",
+              "valueFrom": {
+                "path": "/tmp/digest.txt"
+              }
+            },
+            {
+              "name": "dockerfile-content",
+              "valueFrom": {
+                "path": "/source/Dockerfile"
+              }
+            }
+          ],
+          "artifacts": [
+            {
+              "name": "project-toml-change-py",
+              "path": "/source/project-toml-change.py"
+            }
+          ]
+        },
+        "metadata": {},
+        "container": {
+          "image": "CHANGE_ME",
+          "command": [
+            "sh",
+            "-c"
+          ],
+          "args": [
+            "echo 'CHANGE_ME: 실제 Git Clone, Dockerfile 변경 및 BuildKit 빌드 명령을 설정하세요.' >&2; exit 1"
+          ],
+          "resources": {}
+        },
+        "initContainers": [],
+        "retryStrategy": {}
+      },
+      {
+        "name": "parse-image-digest",
+        "inputs": {
+          "parameters": [
+            {
+              "name": "image-digest"
+            }
+          ]
+        },
+        "outputs": {
+          "parameters": [
+            {
+              "name": "parsed-image-digest",
+              "valueFrom": {
+                "path": "/tmp/parsed-image-digest.txt"
+              }
+            }
+          ]
+        },
+        "script": {
+          "image": "harbor-srep01.ttttt.com/aistudio/ubuntu2404-uv-py39-py314-wf-py313:0.0.6",
+          "command": [
+            "/usr/local/bin/uv",
+            "run",
+            "python"
+          ],
+          "source": "import re\n\ndigest = r'''{{inputs.parameters.image-digest}}'''.strip()\nmatch = re.search(r'sha256:[0-9a-fA-F]{64}', digest)\nif not match:\n    raise ValueError('valid sha256 image digest was not found')\n\nwith open('/tmp/parsed-image-digest.txt', 'w', encoding='utf-8') as file:\n    file.write(match.group(0).lower())\n"
+        }
+      },
+      {
+        "name": "notify-server",
+        "inputs": {
+          "parameters": [
+            {
+              "name": "notification-server-url"
+            },
+            {
+              "name": "image-digest"
+            },
+            {
+              "name": "image-reference"
+            }
+          ]
+        },
+        "container": {
+          "image": "CHANGE_ME",
+          "command": [
+            "sh",
+            "-c"
+          ],
+          "args": [
+            "echo 'CHANGE_ME: 내부 알림 서버 호출 명령을 설정하세요.' >&2; exit 1"
+          ]
+        }
+      }
+    ],
+    "entrypoint": "main",
+    "arguments": {
+      "parameters": [
+        {
+          "name": "bitbucket-address-user-code",
+          "value": "CHANGE_ME"
+        },
+        {
+          "name": "bitbucket-address-docker-template",
+          "value": "CHANGE_ME"
+        },
+        {
+          "name": "registry-address",
+          "value": "CHANGE_ME"
+        },
+        {
+          "name": "registry-project",
+          "value": "CHANGE_ME"
+        },
+        {
+          "name": "image-name",
+          "value": "CHANGE_ME"
+        },
+        {
+          "name": "image-tag",
+          "value": "CHANGE_ME"
+        },
+        {
+          "name": "notification-server-url",
+          "value": "CHANGE_ME"
+        }
+      ]
+    },
+    "outputs": {}
+  }
+}
