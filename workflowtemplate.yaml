@@ -499,8 +499,56 @@ spec:
           rm -rf /workspace/generated/context
           mkdir -p /workspace/generated/context/app /workspace/generated/context/wheelhouse
           cp -a /workspace/source/. /workspace/generated/context/app/
+          rm -rf /workspace/generated/context/app/.git /workspace/generated/context/app/tests /workspace/generated/context/app/test
           cp -a /workspace/wheelhouse/. /workspace/generated/context/wheelhouse/
           cp "/workspace/source/{{inputs.parameters.lock-file-name}}" /workspace/generated/context/requirements.lock
+
+          # Docker 레이어 구조를 WorkflowTemplate JSON의 script.source에서 직접 생성합니다.
+          cat > /workspace/generated/context/Dockerfile <<'DOCKERFILE'
+          # syntax=docker/dockerfile:1.7
+          ARG RUNTIME_IMAGE
+
+          # Layer 1: 변경 빈도가 낮은 공통 Runtime Base
+          FROM ${RUNTIME_IMAGE} AS base
+          ENV PYTHONDONTWRITEBYTECODE=1 \
+              PYTHONUNBUFFERED=1 \
+              PIP_DISABLE_PIP_VERSION_CHECK=1
+          WORKDIR /app
+
+          # Layer 2: Lock/Wheelhouse를 소스보다 먼저 복사해 의존성 캐시 유지
+          FROM base AS dependencies
+          COPY requirements.lock /build/requirements.lock
+          COPY wheelhouse /build/wheelhouse
+          RUN python -m pip install \
+                --no-index \
+                --find-links=/build/wheelhouse \
+                --only-binary=:all: \
+                --prefix=/opt/python-dependencies \
+                -r /build/requirements.lock \
+              && rm -rf /root/.cache/pip /build/wheelhouse
+
+          # Layer 3: 테스트 전용 계층이며 최종 Release 이미지에는 포함하지 않음
+          FROM base AS test
+          COPY --from=dependencies /opt/python-dependencies/ /usr/local/
+          COPY app /app
+          RUN python -m compileall -q /app \
+              && if [ -d /app/tests ]; then python -m pytest -q /app/tests; fi
+
+          # Layer 4: 자주 변경되는 애플리케이션 소스를 의존성 다음에 배치
+          FROM base AS source-clean
+          COPY app /clean-app
+          RUN rm -rf /clean-app/tests /clean-app/test /clean-app/.git \
+              /clean-app/.pytest_cache /clean-app/.mypy_cache /clean-app/.ruff_cache
+
+          # Layer 5: 실행 의존성과 정리된 소스만 포함한 최종 이미지
+          FROM base AS release
+          COPY --from=dependencies /opt/python-dependencies/ /usr/local/
+          COPY --from=source-clean /clean-app /app
+          USER 10001:10001
+          CMD ["python", "-m", "app"]
+          DOCKERFILE
+
+          printf '%s' 'base,dependencies,test,source-clean,release' > /workspace/generated/docker-layer-stages.txt
           cat > /workspace/generated/build-spec.json <<'JSON'
           {
             "repositoryName": "{{inputs.parameters.repository-name}}",
@@ -509,18 +557,13 @@ spec:
             "lockFileName": "{{inputs.parameters.lock-file-name}}",
             "lockHash": "{{inputs.parameters.lock-hash}}",
             "imageReference": "{{inputs.parameters.image-reference}}",
-            "cacheReference": "{{inputs.parameters.cache-reference}}"
+            "cacheReference": "{{inputs.parameters.cache-reference}}",
+            "dockerLayerStages": ["base", "dependencies", "test", "source-clean", "release"]
           }
           JSON
-          python /opt/build-tools/scripts/validate_build_spec.py \
-            --schema /opt/build-tools/schemas/build-spec.schema.json \
-            /workspace/generated/build-spec.json
-          python /opt/build-tools/scripts/render_dockerfile.py \
-            --template /opt/build-tools/templates/Dockerfile.template \
-            --output /workspace/generated/context/Dockerfile
-          cp /opt/build-tools/templates/docker-bake.hcl /workspace/generated/context/docker-bake.hcl
           test -s /workspace/generated/context/Dockerfile
-          test -s /workspace/generated/context/docker-bake.hcl
+          test -s /workspace/generated/build-spec.json
+          printf 'Docker layers: base -> dependencies -> test -> source-clean -> release\n'
         volumeMounts:
           - name: workspace
             mountPath: /workspace
